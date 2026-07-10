@@ -150,6 +150,15 @@ weekly timer (`POST /api/universe/refresh`), pushes a heads-up when the set
 changes, and never strands a position: a coin that falls out of the top-N but
 is still held stays sellable until closed. `GET /api/universe` shows it.
 
+
+## Login (optional)
+
+Set `DASHBOARD_PASSWORD` (env or the settings page's Security card) to require a
+password for the dashboard, portfolio view and controls. It's a single-password
+cookie login; the health check and the timer-triggered action endpoints stay
+open (they expose no data). Leave it blank to run open on a trusted LAN or behind
+your own reverse-proxy auth.
+
 ## Licence
 
 MIT © 2026 [Colm Finn](https://github.com/colfin22).

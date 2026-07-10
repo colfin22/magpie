@@ -37,6 +37,10 @@ HA_TOKEN = os.environ.get("HA_TOKEN", "")
 HA_NOTIFY_SERVICE = os.environ.get("HA_NOTIFY_SERVICE", "")
 HA_NOTIFY_CLICK_URL = os.environ.get("HA_NOTIFY_CLICK_URL", "")  # tap-to-open URL on the push (the dashboard)
 
+# login: set a password to gate the UI + control endpoints. Empty = no auth
+# (fine behind your own reverse-proxy auth). Localhost (the timers) is exempt.
+DASHBOARD_PASSWORD = os.environ.get("DASHBOARD_PASSWORD", "")
+
 
 def mode() -> str:
     return "live" if (TRADING_ENABLED and KRAKEN_API_KEY and KRAKEN_API_SECRET) else "paper"
@@ -51,8 +55,10 @@ EDITABLE = {
     "HA_URL": "str", "HA_TOKEN": "str", "HA_NOTIFY_SERVICE": "str",
     "PAIRS": "csv", "SKIM_FRACTION": "float",
     "DYNAMIC_UNIVERSE_ENABLED": "bool", "DYNAMIC_TOP_N": "int",
+    "DASHBOARD_PASSWORD": "str",
 }
-SECRET_KEYS = {"GEMINI_API_KEY", "KRAKEN_API_KEY", "KRAKEN_API_SECRET", "HA_TOKEN"}
+SECRET_KEYS = {"GEMINI_API_KEY", "KRAKEN_API_KEY", "KRAKEN_API_SECRET", "HA_TOKEN",
+               "DASHBOARD_PASSWORD"}
 
 
 def _cast(key: str, raw: str):

@@ -1,9 +1,9 @@
 import logging
 
-from fastapi import Body, FastAPI
-from fastapi.responses import HTMLResponse, Response
+from fastapi import Body, FastAPI, Form
+from fastapi.responses import HTMLResponse, RedirectResponse, Response
 
-from . import __version__, advisor, config, db, engine, ha, ledger, market, portfolio, universe
+from . import __version__, advisor, auth, config, db, engine, ha, ledger, market, portfolio, universe
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 LOGGER = logging.getLogger(__name__)
@@ -24,6 +24,62 @@ async def no_store(request, call_next):
     # browsers must never serve stale portfolio state (#4)
     resp = await call_next(request)
     resp.headers["Cache-Control"] = "no-store, must-revalidate"
+    return resp
+
+
+@app.middleware("http")
+async def auth_gate(request, call_next):
+    """Gate everything behind a password when one is set (#14). Health is public;
+    localhost (the timers) is always allowed."""
+    path = request.url.path
+    if path not in auth.PUBLIC_PATHS:
+        conn = db.connect()
+        try:
+            authed = auth.is_authed(request, conn)
+        finally:
+            conn.close()
+        if not authed:
+            wants_html = request.method == "GET" and "text/html" in request.headers.get("accept", "")
+            if wants_html:
+                return RedirectResponse("/login", status_code=302)
+            return Response(status_code=401, content="authentication required")
+    return await call_next(request)
+
+
+@app.get("/login", response_class=HTMLResponse)
+def login_page(bad: int = 0):
+    err = '<p style="color:#ff6b6b">Wrong password.</p>' if bad else ''
+    return f"""<!doctype html><html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1"><title>Magpie — login</title>
+<style>body{{font-family:system-ui;background:#12151c;color:#e6e9f0;display:flex;min-height:100vh;
+margin:0;align-items:center;justify-content:center}}form{{background:#1a1f2b;border:1px solid #262d3c;
+border-radius:12px;padding:2rem;width:280px}}h1{{font-size:1.3rem;margin:0 0 1rem}}
+input{{width:100%;box-sizing:border-box;background:#12151c;border:1px solid #2a3140;border-radius:8px;
+color:#e6e9f0;padding:.6rem;font-size:1rem;margin:.5rem 0}}button{{width:100%;background:#4cd97b;color:#0a0d12;
+border:0;border-radius:8px;padding:.6rem;font-weight:700;font-size:1rem;cursor:pointer;margin-top:.5rem}}</style>
+</head><body><form method="post" action="/login"><h1>🐦‍⬛ Magpie</h1>{err}
+<input type="password" name="password" placeholder="Password" autofocus>
+<button type="submit">Sign in</button></form></body></html>"""
+
+
+@app.post("/login")
+def login_submit(password: str = Form("")):
+    conn = db.connect()
+    try:
+        if auth.check_password(conn, password):
+            resp = RedirectResponse("/", status_code=302)
+            resp.set_cookie(auth.COOKIE, auth.token(conn), httponly=True,
+                            max_age=30 * 86400, samesite="lax")
+            return resp
+        return RedirectResponse("/login?bad=1", status_code=302)
+    finally:
+        conn.close()
+
+
+@app.post("/logout")
+def logout():
+    resp = RedirectResponse("/login", status_code=302)
+    resp.delete_cookie(auth.COOKIE)
     return resp
 
 
@@ -428,11 +484,18 @@ deliberate environment change (<code>TRADING_ENABLED</code>), never a setting he
     <span class="result" id="r-universe"></span></div>
 </div>
 
+<div class="card">
+  <p class="eyebrow">Security</p>
+  <label>Dashboard password</label><input id="DASHBOARD_PASSWORD" type="password" placeholder="">
+  <p class="note">Set a password to require login for the dashboard and controls. Blank = keep current; clearing it (type a space then delete) leaves it unchanged — remove via the env to disable auth.</p>
+</div>
+
 <div class="row"><button class="primary" onclick="save()">Save settings</button>
-  <span class="result" id="saved"></span></div>
+  <span class="result" id="saved"></span>
+  <span style="flex:1"></span><button class="test" onclick="fetch('/logout',{method:'POST'}).then(()=>location='/login')">Log out</button></div>
 
 <script>
-const SECRETS = ["GEMINI_API_KEY","KRAKEN_API_KEY","KRAKEN_API_SECRET","HA_TOKEN"];
+const SECRETS = ["GEMINI_API_KEY","KRAKEN_API_KEY","KRAKEN_API_SECRET","HA_TOKEN","DASHBOARD_PASSWORD"];
 const PLAIN = ["GEMINI_MODEL","GEMINI_MODEL_DEEP","HA_URL","HA_NOTIFY_SERVICE","PAIRS","SKIM_FRACTION","DYNAMIC_TOP_N"];
 async function load(){
   const s = await (await fetch('/api/settings',{cache:'no-store'})).json();
