@@ -14,9 +14,14 @@ def notify(title: str, message: str) -> bool:
         return False
     try:
         domain, name = config.HA_NOTIFY_SERVICE.split(".")
+        payload = {"title": title, "message": message}
+        if config.HA_NOTIFY_CLICK_URL:
+            # tap-to-open the dashboard (clickAction = Android, url = iOS)
+            payload["data"] = {"clickAction": config.HA_NOTIFY_CLICK_URL,
+                               "url": config.HA_NOTIFY_CLICK_URL}
         r = httpx.post(f"{config.HA_URL}/api/services/{domain}/{name}",
                        headers={"Authorization": f"Bearer {config.HA_TOKEN}"},
-                       json={"title": title, "message": message}, timeout=30)
+                       json=payload, timeout=30)
         r.raise_for_status()
         return True
     except httpx.HTTPError as e:

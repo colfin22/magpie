@@ -31,6 +31,7 @@ ERROR_ALERT_AFTER = int(os.environ.get("ERROR_ALERT_AFTER", "3"))    # consecuti
 HA_URL = os.environ.get("HA_URL", "").rstrip("/")
 HA_TOKEN = os.environ.get("HA_TOKEN", "")
 HA_NOTIFY_SERVICE = os.environ.get("HA_NOTIFY_SERVICE", "")
+HA_NOTIFY_CLICK_URL = os.environ.get("HA_NOTIFY_CLICK_URL", "")  # tap-to-open URL on the push (the dashboard)
 
 
 def mode() -> str:
