@@ -143,7 +143,7 @@ def dashboard():
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Magpie</title>
 <style>
- body{font-family:system-ui;margin:1.5rem;background:#12151c;color:#e6e9f0;max-width:980px}
+ body{font-family:system-ui;margin:1.5rem auto;padding:0 1rem;background:#12151c;color:#e6e9f0;max-width:980px}
  h1{font-size:1.4rem} .big{font-size:2rem;font-weight:700}
  .dim{color:#8b93a7} .card{background:#1a1f2b;border-radius:10px;padding:1rem;margin:.8rem 0}
  .row{display:flex;gap:.8rem;flex-wrap:wrap} .row .card{flex:1;min-width:180px;margin:0}
