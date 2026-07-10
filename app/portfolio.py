@@ -73,36 +73,77 @@ def min_order_eur(pair: str) -> float:
         return 10.0
 
 
+def _live_fill(pair: str, side: str, amount: float, limit_price: float) -> tuple[str | None, float]:
+    """Place a post-only limit at the touch; fall back to market if unfilled.
+
+    Returns (exchange_id, fee_rate_actually_paid). Maker fills save ~0.15%
+    per side over market orders — free money on every patient fill.
+    """
+    import time as _t
+    ex = market.exchange()
+    try:
+        o = ex.create_order(pair, "limit", side, amount, limit_price, {"postOnly": True})
+    except Exception as e:  # noqa: BLE001 - post-only rejected (would cross) -> just take
+        LOGGER.info("post-only rejected (%s) — going to market", e)
+        o = ex.create_order(pair, "market", side, amount)
+        return o.get("id"), config.TAKER_FEE
+    deadline = _t.time() + config.LIMIT_FILL_WAIT_S
+    while _t.time() < deadline:
+        _t.sleep(5)
+        st = ex.fetch_order(o["id"], pair)
+        if st.get("status") == "closed":
+            return o["id"], config.MAKER_FEE
+    try:
+        ex.cancel_order(o["id"], pair)
+    except Exception:  # noqa: BLE001 - may have filled in the race; checked below
+        pass
+    st = ex.fetch_order(o["id"], pair)
+    filled = float(st.get("filled") or 0)
+    if filled >= amount * 0.999:
+        return o["id"], config.MAKER_FEE
+    remainder = amount - filled
+    LOGGER.info("limit unfilled after %ss (%.6f of %.6f) — market for the rest",
+                config.LIMIT_FILL_WAIT_S, filled, amount)
+    o2 = ex.create_order(pair, "market", side, remainder)
+    # blended fee, weighted by how much each path filled
+    rate = (filled * config.MAKER_FEE + remainder * config.TAKER_FEE) / amount
+    return o2.get("id"), rate
+
+
 def execute(conn, mode: str, sleeve: str, decision_id: int, action: str, pair: str,
             fraction: float, prices: dict[str, float]) -> dict:
-    """Execute a validated buy/sell inside one sleeve's books."""
-    price = prices[pair]
+    """Execute a validated buy/sell inside one sleeve's books.
+
+    Fills aim for maker pricing: a post-only limit at the current touch
+    (paper mode assumes the maker fill at that price)."""
+    t = market.touch(pair)
     asset = pair.split("/")[0]
     h = holdings(conn, mode, sleeve)
     if action == "buy":
+        price = t["bid"]
         spend = h.get("EUR", 0.0) * fraction
         if spend < min_order_eur(pair):
             raise ValueError(f"buy of €{spend:.2f} is under the €{min_order_eur(pair):.0f} exchange minimum")
-        fee = spend * config.TAKER_FEE
-        amount = (spend - fee) / price
+        amount = (spend * (1 - config.MAKER_FEE)) / price
         if mode == "live":
-            order = market.exchange().create_market_buy_order(pair, amount)
-            exchange_id = order.get("id")
+            exchange_id, fee_rate = _live_fill(pair, "buy", amount, price)
         else:
-            exchange_id = None
+            exchange_id, fee_rate = None, config.MAKER_FEE
+        fee = spend * fee_rate
+        amount = (spend - fee) / price
         _set(conn, mode, sleeve, "EUR", h.get("EUR", 0.0) - spend)
         _set(conn, mode, sleeve, asset, h.get(asset, 0.0) + amount)
     elif action == "sell":
+        price = t["ask"]
         amount = h.get(asset, 0.0) * fraction
         proceeds = amount * price
         if amount <= 0 or proceeds < 1.0:
             raise ValueError(f"nothing meaningful to sell ({asset} balance {h.get(asset, 0.0)})")
-        fee = proceeds * config.TAKER_FEE
         if mode == "live":
-            order = market.exchange().create_market_sell_order(pair, amount)
-            exchange_id = order.get("id")
+            exchange_id, fee_rate = _live_fill(pair, "sell", amount, price)
         else:
-            exchange_id = None
+            exchange_id, fee_rate = None, config.MAKER_FEE
+        fee = proceeds * fee_rate
         _set(conn, mode, sleeve, asset, h.get(asset, 0.0) - amount)
         _set(conn, mode, sleeve, "EUR", h.get("EUR", 0.0) + proceeds - fee)
         spend = proceeds

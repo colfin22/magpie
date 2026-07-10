@@ -30,14 +30,25 @@ def _record(conn, mode, sleeve, status, detail="", prompt=None, raw=None, decisi
     return cur.lastrowid
 
 
-def run_sleeve(conn, mode: str, sleeve: str, prices: dict, market_data: list[dict]) -> dict:
+DEEP_SLEEVES = ("quarter", "vault")  # rare decisions get the stronger model
+
+
+def run_sleeve(conn, mode: str, sleeve: str, prices: dict, market_data: list[dict],
+               extras: dict | None = None) -> dict:
     port = portfolio.valued(conn, mode, sleeve, prices)
+    # the swing sleeve decides 6-hourly — give it 4h candles alongside the dailies
+    data = list(market_data)
+    if sleeve == "swing":
+        data += [market.summary(conn, p, timeframe="4h") for p in config.PAIRS]
     prompt = advisor.build_prompt(
-        port, market_data, recent_history(conn, mode, sleeve),
+        port, data, recent_history(conn, mode, sleeve),
         min_order=max(portfolio.min_order_eur(p) for p in config.PAIRS),
-        mandate=sleeves.MANDATES[sleeve])
+        mandate=sleeves.MANDATES[sleeve],
+        lessons=db.get_setting(conn, "lessons", "") or "",
+        extras=extras)
     try:
-        raw = advisor.ask(prompt)
+        raw = advisor.ask(prompt, model=config.GEMINI_MODEL_DEEP
+                          if sleeve in DEEP_SLEEVES else None)
     except advisor.AdvisorError as e:
         status = "no_key" if "no GEMINI_API_KEY" in str(e) else "error"
         _record(conn, mode, sleeve, status, str(e), prompt=prompt)
@@ -91,13 +102,18 @@ def run_cycle(now=None) -> dict:
         except Exception as e:  # noqa: BLE001 - a balance blip must not stop the cycle
             LOGGER.warning("top-up detection failed: %s", e)
 
+        due_now = [s for s in sleeves.ALL if sleeves.due(s, now)]
         for pair in config.PAIRS:
             market.refresh_candles(conn, pair)
+            if "swing" in due_now:
+                market.refresh_candles(conn, pair, timeframe="4h", limit=200)
         prices = market.tickers(config.PAIRS)
         market_data = [market.summary(conn, p) for p in config.PAIRS]
+        extras = {"fear_greed_index": market.fear_greed(),
+                  "orderbook_touch": {p: market.touch(p) for p in config.PAIRS}}
 
-        results = [run_sleeve(conn, mode, s, prices, market_data)
-                   for s in sleeves.ALL if sleeves.due(s, now)]
+        results = [run_sleeve(conn, mode, s, prices, market_data, extras)
+                   for s in due_now]
         skims = portfolio.skim_profits(conn, mode, prices)
         ov = portfolio.snapshot_all(conn, mode, prices)
         return {"status": "ok", "mode": mode, "topup": topup, "results": results,
@@ -128,5 +144,61 @@ def daily_digest() -> dict:
                f"{trades} trades. " + " · ".join(bits))
         pushed = ha.notify("Magpie daily digest", msg)
         return {"pushed": pushed, "summary": msg}
+    finally:
+        conn.close()
+
+
+REVIEW_PROMPT = """You are the portfolio manager reviewing YOUR OWN past month of
+cryptocurrency trading decisions. Below is your decision log (with your reasoning
+at the time), the orders that executed, and the equity progression.
+
+Write yourself a concise lessons note (max 200 words) that will be injected into
+all your future decision prompts. Focus on what your log shows actually worked
+and what didn't: patterns you should repeat, mistakes you should not, market
+conditions you misread. Be specific and honest — this note is the only memory
+you will carry forward.
+
+Decision log:
+{decisions}
+
+Orders:
+{orders}
+
+Equity snapshots (daily):
+{equity}
+
+Answer with ONLY the lessons note text, no preamble."""
+
+
+def self_review() -> dict:
+    """Monthly: distil the ledger into a lessons note for future prompts."""
+    conn = db.connect()
+    mode = config.mode()
+    try:
+        decisions = [dict(r) for r in conn.execute(
+            "SELECT at, sleeve, action, pair, fraction, status, reasoning FROM decisions "
+            "WHERE mode=? AND at >= date('now','-31 days') ORDER BY id", (mode,))]
+        orders = [dict(r) for r in conn.execute(
+            "SELECT at, sleeve, pair, side, price, cost, fee FROM orders "
+            "WHERE mode=? AND at >= date('now','-31 days') ORDER BY id", (mode,))]
+        equity = [dict(r) for r in conn.execute(
+            "SELECT substr(at,1,10) day, ROUND(SUM(total_eur),2) eur FROM snapshots "
+            "WHERE mode=? AND at >= date('now','-31 days') GROUP BY day, sleeve "
+            "HAVING id=MAX(id)", (mode,))]
+        if not decisions:
+            return {"status": "skipped", "detail": "no decisions to review yet"}
+        prompt = REVIEW_PROMPT.format(
+            decisions=json.dumps(decisions, indent=1)[:30000],
+            orders=json.dumps(orders, indent=1)[:8000],
+            equity=json.dumps(equity, indent=1)[:4000])
+        try:
+            note = advisor.ask(prompt, model=config.GEMINI_MODEL_DEEP).strip()[:1500]
+        except advisor.AdvisorError as e:
+            return {"status": "error", "detail": str(e)}
+        db.set_setting(conn, "lessons", note)
+        db.set_setting(conn, "lessons_at", _now())
+        ha.notify("Magpie monthly self-review",
+                  note[:220] + ("…" if len(note) > 220 else ""))
+        return {"status": "ok", "lessons": note}
     finally:
         conn.close()

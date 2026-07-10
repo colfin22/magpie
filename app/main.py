@@ -40,6 +40,12 @@ def api_digest():
     return engine.daily_digest()
 
 
+@app.post("/api/review")
+def api_review():
+    """Monthly self-review: distil the ledger into a lessons note (see engine)."""
+    return engine.self_review()
+
+
 @app.post("/api/topup")
 def api_topup(amount: float = 0):
     """Paper-mode only: simulate a cash deposit (live deposits are auto-detected)."""

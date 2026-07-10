@@ -46,6 +46,17 @@ gains) is skimmed into the vault, and the mark ratchets up. The vault accumulate
 long-term positions out of house winnings only — losing sleeves are never
 refilled from it.
 
+**It learns from itself.** Once a month it re-reads its own diary — every
+decision, what it reasoned at the time, and what actually happened — and writes
+itself a lessons note that is injected into all future prompts. The only memory
+it carries forward is the one it earns.
+
+**It trades like a local.** Orders go in as post-only limits at the touch
+(maker fee ~0.25%) with a patient window before falling back to market
+(~0.40%) — a guaranteed saving on every fill that patience can win. Decisions
+see daily *and* 4-hour indicators, the live spread, and the Crypto Fear & Greed
+index; the slow sleeves think with a stronger model than the fast ones.
+
 **Top-ups:** deposit more EUR to the exchange whenever you like. The bot notices
 the surplus at its next cycle, splits it equally across the three active sleeves,
 and raises their high-water marks so fresh cash is never mistaken for profit.
@@ -92,6 +103,7 @@ Schedule the heartbeat (systemd timer or cron):
 ```
 0 0,6,12,18 * * *  curl -s -X POST http://localhost:8000/api/cycle
 5 18 * * *         curl -s -X POST http://localhost:8000/api/digest
+30 5 1 * *         curl -s -X POST http://localhost:8000/api/review
 ```
 
 The cycle endpoint is safe to call at any hour — sleeve cadences are gated
@@ -104,6 +116,7 @@ vault on the 1st of the month).
 - `GET /api/state` — full portfolio, sleeve breakdown, decision diary, skims
 - `POST /api/cycle` — run a decision tick
 - `POST /api/digest` — push the daily summary
+- `POST /api/review` — run the monthly self-review (writes the lessons note)
 - `POST /api/halt` / `POST /api/resume` — the only human controls
 - `POST /api/topup?amount=` — paper mode only; live deposits are auto-detected
 
