@@ -119,3 +119,25 @@ def test_indicators():
     assert market.ema([1.0, 2.0], 200) is None
     assert market.rsi(series) == 100.0
     assert market.pct_return([100.0, 110.0], 1) == pytest.approx(10.0)
+
+
+def test_consecutive_failure_counter(monkeypatch):
+    from app import engine, ha
+    pushes = []
+    monkeypatch.setattr(ha, "notify", lambda t, m: pushes.append(t) or True)
+    conn, p = make_db()
+    try:
+        bad = [{"status": "error"}]
+        for _ in range(config.ERROR_ALERT_AFTER - 1):
+            engine._track_cycle_outcome(conn, bad, crashed=False)
+        assert pushes == []  # not yet
+        engine._track_cycle_outcome(conn, bad, crashed=False)
+        assert len(pushes) == 1  # fires exactly at the threshold
+        engine._track_cycle_outcome(conn, bad, crashed=False)
+        assert len(pushes) == 1  # ...and only once
+        engine._track_cycle_outcome(conn, [{"status": "held"}], crashed=False)
+        assert db.get_setting(conn, "consecutive_failures") == "0"  # success resets
+        engine._track_cycle_outcome(conn, [], crashed=True)
+        assert db.get_setting(conn, "consecutive_failures") == "1"  # crashes count
+    finally:
+        conn.close(); os.unlink(p)

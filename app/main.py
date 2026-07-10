@@ -11,6 +11,14 @@ LOGGER = logging.getLogger(__name__)
 app = FastAPI(title="Magpie", version=__version__)
 
 
+@app.middleware("http")
+async def no_store(request, call_next):
+    # browsers must never serve stale portfolio state (#4)
+    resp = await call_next(request)
+    resp.headers["Cache-Control"] = "no-store, must-revalidate"
+    return resp
+
+
 @app.get("/health")
 def health():
     conn = db.connect()
@@ -18,10 +26,22 @@ def health():
         last = conn.execute("SELECT at, sleeve, status FROM decisions ORDER BY id DESC LIMIT 1").fetchone()
         snap = conn.execute("SELECT SUM(total_eur) t FROM snapshots WHERE id IN "
                             "(SELECT MAX(id) FROM snapshots GROUP BY sleeve)").fetchone()
+        from datetime import datetime, timezone
+        last_cycle = db.get_setting(conn, "last_cycle_at")
+        stale = True
+        if last_cycle:
+            age = (datetime.now(timezone.utc)
+                   - datetime.fromisoformat(last_cycle)).total_seconds()
+            stale = age > config.STALE_AFTER_S
+        failures = int(db.get_setting(conn, "consecutive_failures", "0") or 0)
         return {
             "ok": True, "version": __version__, "mode": config.mode(),
             "halted": db.get_setting(conn, "halted") == "1",
             "gemini_configured": bool(config.GEMINI_API_KEY),
+            "last_cycle_at": last_cycle,
+            "stale": stale,                    # no cycle within STALE_AFTER_S (#1)
+            "consecutive_failures": failures,  # cycles failing in a row (#2)
+            "healthy": not stale and failures < config.ERROR_ALERT_AFTER,
             "last_decision": dict(last) if last else None,
             "last_equity_eur": round(snap["t"], 2) if snap and snap["t"] else None,
         }
@@ -114,7 +134,7 @@ def dashboard():
  .hold{color:#8b93a7}.buy{color:#4cd97b}.sell{color:#ff6b6b}.err{color:#ffb020}
  button{background:#ff6b6b;color:#000;border:0;border-radius:8px;padding:.6rem 1.2rem;font-weight:700}
 </style></head><body>
-<h1>🐦‍⬛ Magpie <span class="dim" id="mode"></span></h1>
+<h1>🐦‍⬛ Magpie <span class="dim" id="mode"></span> <span class="dim" id="updated" style="float:right;font-size:.8rem"></span></h1>
 <div class="card"><div class="dim">Total</div><div class="big" id="equity">…</div></div>
 <div class="row" id="sleeves"></div>
 <div class="card"><div class="dim">Recent decisions</div><table id="log"></table></div>
@@ -122,7 +142,8 @@ def dashboard():
 <span class="dim" id="halted"></span></div>
 <script>
 async function load(){
-  const s = await (await fetch('/api/state')).json();
+  const s = await (await fetch('/api/state', {cache: 'no-store'})).json();
+  document.getElementById('updated').textContent = 'updated ' + new Date().toLocaleTimeString();
   document.getElementById('mode').textContent = `(${s.mode}${s.halted ? " — HALTED" : ""})`;
   document.getElementById('equity').textContent = `€${s.overview.total_eur.toFixed(2)}`;
   document.getElementById('halted').textContent = s.halted ? " halted — POST /api/resume to re-arm" : "";

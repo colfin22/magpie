@@ -83,6 +83,22 @@ def run_sleeve(conn, mode: str, sleeve: str, prices: dict, market_data: list[dic
             "reasoning": decision["reasoning"]}
 
 
+def _track_cycle_outcome(conn, results: list[dict], crashed: bool) -> None:
+    """Count consecutive failed cycles; push HA once when the threshold hits (#2).
+
+    A cycle fails when it crashes or when every due sleeve errored. Held and
+    executed decisions both count as the bot working."""
+    failed = crashed or (results != [] and all(
+        r.get("status") in ("error", "no_key", "invalid") for r in results))
+    n = int(db.get_setting(conn, "consecutive_failures", "0") or 0)
+    n = n + 1 if failed else 0
+    db.set_setting(conn, "consecutive_failures", str(n))
+    if n == config.ERROR_ALERT_AFTER:
+        ha.notify("Magpie is failing silently",
+                  f"{n} decision cycles in a row have failed — check the diary "
+                  f"and logs. Trading is NOT halted; the bot just isn't managing.")
+
+
 def run_cycle(now=None) -> dict:
     conn = db.connect()
     mode = config.mode()
@@ -116,8 +132,13 @@ def run_cycle(now=None) -> dict:
                    for s in due_now]
         skims = portfolio.skim_profits(conn, mode, prices)
         ov = portfolio.snapshot_all(conn, mode, prices)
+        _track_cycle_outcome(conn, results, crashed=False)
+        db.set_setting(conn, "last_cycle_at", _now())
         return {"status": "ok", "mode": mode, "topup": topup, "results": results,
                 "skims": skims, "total_eur": ov["total_eur"]}
+    except Exception:
+        _track_cycle_outcome(conn, [], crashed=True)
+        raise
     finally:
         conn.close()
 

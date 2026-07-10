@@ -24,6 +24,9 @@ TAKER_FEE = float(os.environ.get("TAKER_FEE", "0.004"))   # market-order fee (fa
 MAKER_FEE = float(os.environ.get("MAKER_FEE", "0.0025"))  # post-only limit fee (preferred fills)
 LIMIT_FILL_WAIT_S = int(os.environ.get("LIMIT_FILL_WAIT_S", "90"))  # patience before falling back to market
 
+STALE_AFTER_S = int(os.environ.get("STALE_AFTER_S", str(7 * 3600)))  # no cycle in 7h = unhealthy (#1)
+ERROR_ALERT_AFTER = int(os.environ.get("ERROR_ALERT_AFTER", "3"))    # consecutive failed cycles -> HA push (#2)
+
 # notifications (optional, same pattern as the other house apps)
 HA_URL = os.environ.get("HA_URL", "").rstrip("/")
 HA_TOKEN = os.environ.get("HA_TOKEN", "")
