@@ -323,6 +323,7 @@ def dashboard():
 </style></head><body>
 <h1>🐦‍⬛ Magpie <span class="dim" id="mode"></span> <span class="dim" id="ver" style="font-size:.8rem"></span>
 <span style="float:right;font-size:.8rem"><a href="/settings" style="color:#8b93a7;text-decoration:none">⚙ settings</a>
+<a href="#" onclick="fetch('/logout',{method:'POST'}).then(()=>location='/login');return false" style="color:#8b93a7;text-decoration:none;margin-left:12px">⎋ log out</a>
 <span class="dim" id="updated" style="margin-left:12px"></span></span></h1>
 <div class="card"><div class="dim">Total portfolio <span id="nextcheck" style="float:right"></span></div>
 <div class="big" id="equity">…</div>
