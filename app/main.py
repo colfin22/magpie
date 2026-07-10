@@ -3,7 +3,7 @@ import logging
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse, Response
 
-from . import __version__, config, db, engine, market, portfolio
+from . import __version__, config, db, engine, ledger, market, portfolio
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 LOGGER = logging.getLogger(__name__)
@@ -66,6 +66,16 @@ def api_review():
     return engine.self_review()
 
 
+@app.post("/api/reconcile")
+def api_reconcile():
+    """Nightly: absorb drift between the sleeve books and exchange reality."""
+    conn = db.connect()
+    try:
+        return ledger.reconcile(conn, config.mode(), market.tickers(config.PAIRS))
+    finally:
+        conn.close()
+
+
 @app.post("/api/topup")
 def api_topup(amount: float = 0):
     """Paper-mode only: simulate a cash deposit (live deposits are auto-detected)."""
@@ -111,8 +121,15 @@ def api_state():
             "FROM decisions ORDER BY id DESC LIMIT 30")]
         skims = [dict(r) for r in conn.execute(
             "SELECT at, sleeve, amount FROM skims ORDER BY id DESC LIMIT 10")]
+        curve = [dict(r) for r in conn.execute(
+            "SELECT substr(at,1,16) t, ROUND(SUM(total_eur),2) eur FROM snapshots "
+            "WHERE mode=? GROUP BY t ORDER BY t DESC LIMIT 400", (config.mode(),))]
+        trips = ledger.round_trips(conn, config.mode())
         return {"mode": config.mode(), "prices": prices, "overview": ov,
                 "halted": db.get_setting(conn, "halted") == "1",
+                "benchmark": ledger.bench_value(conn, config.mode(), prices),
+                "equity_curve": list(reversed(curve)),
+                "trips": trips[:15], "trip_stats": ledger.trip_stats(trips),
                 "decisions": decisions, "skims": skims}
     finally:
         conn.close()
@@ -135,8 +152,12 @@ def dashboard():
  button{background:#ff6b6b;color:#000;border:0;border-radius:8px;padding:.6rem 1.2rem;font-weight:700}
 </style></head><body>
 <h1>🐦‍⬛ Magpie <span class="dim" id="mode"></span> <span class="dim" id="updated" style="float:right;font-size:.8rem"></span></h1>
-<div class="card"><div class="dim">Total</div><div class="big" id="equity">…</div></div>
+<div class="card"><div class="dim">Total <span id="bench" style="float:right"></span></div>
+<div class="big" id="equity">…</div>
+<svg id="chart" viewBox="0 0 600 120" preserveAspectRatio="none"
+     style="width:100%;height:120px;margin-top:.5rem"></svg></div>
 <div class="row" id="sleeves"></div>
+<div class="card"><div class="dim">Closed trades <span id="tstats" style="float:right"></span></div><table id="trades"></table></div>
 <div class="card"><div class="dim">Recent decisions</div><table id="log"></table></div>
 <div class="card"><button onclick="if(confirm('Halt all trading?'))fetch('/api/halt',{method:'POST'}).then(()=>load())">⛔ HALT TRADING</button>
 <span class="dim" id="halted"></span></div>
@@ -155,6 +176,34 @@ async function load(){
       `<div class="${d >= 0 ? 'up' : 'down'}">${d >= 0 ? '+' : ''}${d.toFixed(2)}</div>` +
       `<div class="dim">${assets.length ? assets.join(', ') : 'in cash'}</div></div>`;
   }).join('');
+  // benchmark line
+  if (s.benchmark) {
+    const edge = s.overview.total_eur - s.benchmark.hodl_eur;
+    const el = document.getElementById('bench');
+    el.textContent = `hodl €${s.benchmark.hodl_eur.toFixed(2)} · bot ${edge >= 0 ? '+' : ''}${edge.toFixed(2)}`;
+    el.className = edge >= 0 ? 'up' : 'down';
+  }
+  // equity sparkline
+  const c = s.equity_curve || [];
+  if (c.length > 1) {
+    const vals = c.map(p => p.eur);
+    const mn = Math.min(...vals), mx = Math.max(...vals), span = (mx - mn) || 1;
+    const pts = vals.map((v, i) =>
+      `${(i / (vals.length - 1) * 600).toFixed(1)},${(110 - (v - mn) / span * 100).toFixed(1)}`).join(' ');
+    document.getElementById('chart').innerHTML =
+      `<polyline points="${pts}" fill="none" stroke="#4cd97b" stroke-width="2"/>`;
+  }
+  // closed trades
+  const ts = s.trip_stats;
+  document.getElementById('tstats').textContent = ts
+    ? `${ts.closed_trades} closed · ${ts.win_rate_pct}% wins · €${ts.total_pnl_eur}` : '';
+  document.getElementById('trades').innerHTML = (s.trips && s.trips.length)
+    ? '<tr><th>sleeve</th><th>pair</th><th>in→out</th><th>held</th><th>P/L</th></tr>' +
+      s.trips.map(t => `<tr><td>${t.sleeve}</td><td>${t.pair}</td>` +
+        `<td class="dim">${t.entry_price.toFixed(0)}→${t.exit_price.toFixed(0)}</td>` +
+        `<td class="dim">${t.held_days}d</td>` +
+        `<td class="${t.pnl_eur >= 0 ? 'up' : 'down'}">€${t.pnl_eur.toFixed(2)} (${t.pnl_pct}%)</td></tr>`).join('')
+    : '<tr><td class="dim">no closed trades yet</td></tr>';
   document.getElementById('log').innerHTML = '<tr><th>when</th><th>sleeve</th><th>what</th><th>why</th></tr>' +
     s.decisions.map(d => `<tr><td class="dim">${d.at.slice(5,16)}</td><td>${d.sleeve||''}</td>` +
       `<td class="${d.status==='executed' ? d.action : d.status==='held' ? 'hold' : 'err'}">` +

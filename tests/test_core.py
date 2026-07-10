@@ -141,3 +141,78 @@ def test_consecutive_failure_counter(monkeypatch):
         assert db.get_setting(conn, "consecutive_failures") == "1"  # crashes count
     finally:
         conn.close(); os.unlink(p)
+
+
+def test_benchmark_init_add_value(monkeypatch):
+    from app import ledger, market
+    conn, p = make_db()
+    prices = {"BTC/EUR": 50_000.0, "ETH/EUR": 2_500.0}
+    monkeypatch.setattr(market, "tickers", lambda pairs: prices)
+    try:
+        ledger.bench_init_if_needed(conn, "paper", 50.0, prices)
+        v = ledger.bench_value(conn, "paper", prices)
+        assert v["hodl_eur"] == pytest.approx(50.0)
+        ledger.bench_init_if_needed(conn, "paper", 999.0, prices)  # no re-init
+        assert ledger.bench_value(conn, "paper", prices)["invested"] == 50.0
+        ledger.bench_add(conn, "paper", 30.0, prices)
+        assert ledger.bench_value(conn, "paper", prices)["hodl_eur"] == pytest.approx(80.0)
+        # hodl value moves with the market
+        double = {"BTC/EUR": 100_000.0, "ETH/EUR": 5_000.0}
+        assert ledger.bench_value(conn, "paper", double)["hodl_eur"] == pytest.approx(160.0)
+    finally:
+        conn.close(); os.unlink(p)
+
+
+def test_round_trips_fifo():
+    from app import ledger
+    conn, p = make_db()
+    try:
+        rows = [
+            ("2026-07-01T00:00:00+00:00", "buy", 0.001, 50_000.0, 0.125),
+            ("2026-07-02T00:00:00+00:00", "buy", 0.001, 60_000.0, 0.15),
+            ("2026-07-05T00:00:00+00:00", "sell", 0.0015, 70_000.0, 0.26),
+        ]
+        for at, side, amount, price, fee in rows:
+            conn.execute("INSERT INTO orders(at, mode, sleeve, pair, side, amount, price, cost, fee) "
+                         "VALUES(?,?,?,?,?,?,?,?,?)",
+                         (at, "paper", "swing", "BTC/EUR", side, amount, price, amount * price, fee))
+        conn.commit()
+        trips = ledger.round_trips(conn, "paper")
+        assert len(trips) == 2  # the sell closed lot 1 fully, lot 2 half
+        full, half = sorted(trips, key=lambda t: t["entry_at"])
+        assert full["entry_price"] == 50_000.0 and full["held_days"] == 4.0
+        assert full["pnl_eur"] > 0
+        assert half["entry_price"] == 60_000.0
+        stats = ledger.trip_stats(trips)
+        assert stats["closed_trades"] == 2 and stats["win_rate_pct"] == 100.0
+    finally:
+        conn.close(); os.unlink(p)
+
+
+def test_reconcile_distributes_drift(monkeypatch):
+    from app import ledger, ha
+    monkeypatch.setattr(ha, "notify", lambda t, m: True)
+    conn, p = make_db()
+    try:
+        prices = {"BTC/EUR": 50_000.0, "ETH/EUR": 2_500.0}
+        # live books: swing holds 0.002 BTC, fortnight 0.001; exchange says 0.0031 total
+        for sleeve, amt in (("swing", 0.002), ("fortnight", 0.001)):
+            conn.execute("INSERT INTO holdings(mode, sleeve, asset, amount) VALUES('live',?,?,?)",
+                         (sleeve, "BTC", amt))
+        conn.commit()
+        actual = {"BTC": 0.0031, "EUR": 0.0, "ETH": 0.0}
+        r = ledger.reconcile(conn, "live", prices, actual=actual)
+        assert r["status"] == "ok"
+        swing = conn.execute("SELECT amount FROM holdings WHERE mode='live' AND sleeve='swing' "
+                             "AND asset='BTC'").fetchone()[0]
+        fort = conn.execute("SELECT amount FROM holdings WHERE mode='live' AND sleeve='fortnight' "
+                            "AND asset='BTC'").fetchone()[0]
+        assert swing + fort == pytest.approx(0.0031)
+        assert swing == pytest.approx(0.002 + 0.0001 * (2 / 3))  # proportional
+        # EUR surplus above the top-up epsilon is NOT absorbed (top-up detector's job)
+        r2 = ledger.reconcile(conn, "live", prices, actual={"BTC": 0.0031, "EUR": 25.0})
+        assert all(a["asset"] != "EUR" for a in r2["adjusted"])
+        # paper mode: books are truth
+        assert ledger.reconcile(conn, "paper", prices)["status"] == "skipped"
+    finally:
+        conn.close(); os.unlink(p)

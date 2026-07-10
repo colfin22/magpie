@@ -3,7 +3,7 @@ import json
 import logging
 from datetime import datetime, timezone
 
-from . import advisor, config, db, ha, market, portfolio, sleeves
+from . import advisor, config, db, ha, ledger, market, portfolio, sleeves
 
 LOGGER = logging.getLogger(__name__)
 
@@ -132,6 +132,7 @@ def run_cycle(now=None) -> dict:
                    for s in due_now]
         skims = portfolio.skim_profits(conn, mode, prices)
         ov = portfolio.snapshot_all(conn, mode, prices)
+        ledger.bench_init_if_needed(conn, mode, ov["total_eur"], prices)
         _track_cycle_outcome(conn, results, crashed=False)
         db.set_setting(conn, "last_cycle_at", _now())
         return {"status": "ok", "mode": mode, "topup": topup, "results": results,
@@ -161,8 +162,13 @@ def daily_digest() -> dict:
             assets = [k for k in v["holdings"] if k != "EUR"]
             bits.append(f"{v['sleeve']} €{v['total_eur']:.2f}"
                         + (f" ({'+'.join(assets)})" if assets else ""))
+        bench = ledger.bench_value(conn, mode, prices)
+        vs = ""
+        if bench:
+            edge = ov["total_eur"] - bench["hodl_eur"]
+            vs = f" · vs hodl €{bench['hodl_eur']:.2f} ({'+' if edge >= 0 else ''}{edge:.2f})"
         msg = (f"[{mode}] €{ov['total_eur']:.2f} ({'+' if delta >= 0 else ''}{delta:.2f} today), "
-               f"{trades} trades. " + " · ".join(bits))
+               f"{trades} trades{vs}. " + " · ".join(bits))
         pushed = ha.notify("Magpie daily digest", msg)
         return {"pushed": pushed, "summary": msg}
     finally:
@@ -208,9 +214,15 @@ def self_review() -> dict:
             "HAVING id=MAX(id)", (mode,))]
         if not decisions:
             return {"status": "skipped", "detail": "no decisions to review yet"}
+        trips = ledger.round_trips(conn, mode)
+        stats = ledger.trip_stats(trips)
+        prices = market.tickers(config.PAIRS)
+        bench = ledger.bench_value(conn, mode, prices)
+        orders_extra = {"closed_round_trips": trips[:40], "stats": stats,
+                        "buy_and_hold_benchmark": bench}
         prompt = REVIEW_PROMPT.format(
             decisions=json.dumps(decisions, indent=1)[:30000],
-            orders=json.dumps(orders, indent=1)[:8000],
+            orders=json.dumps({"orders": orders, **orders_extra}, indent=1)[:12000],
             equity=json.dumps(equity, indent=1)[:4000])
         try:
             note = advisor.ask(prompt, model=config.GEMINI_MODEL_DEEP).strip()[:1500]

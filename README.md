@@ -57,6 +57,14 @@ it carries forward is the one it earns.
 see daily *and* 4-hour indicators, the live spread, and the Crypto Fear & Greed
 index; the slow sleeves think with a stronger model than the fast ones.
 
+**It keeps score against a hodler.** From its first sight of capital it tracks a
+phantom buy-and-hold portfolio of the same money (topped up in lockstep) — the
+dashboard and daily digest always show whether the AI is beating doing nothing,
+and the monthly self-review is confronted with the number. Closed trades are
+FIFO-paired into round trips (win rate, average win/loss, hold time), and a
+nightly reconciliation keeps the virtual sleeve books honest against real
+exchange balances.
+
 **Top-ups:** deposit more EUR to the exchange whenever you like. The bot notices
 the surplus at its next cycle, splits it equally across the three active sleeves,
 and raises their high-water marks so fresh cash is never mistaken for profit.
@@ -103,6 +111,7 @@ Schedule the heartbeat (systemd timer or cron):
 ```
 0 0,6,12,18 * * *  curl -s -X POST http://localhost:8000/api/cycle
 5 18 * * *         curl -s -X POST http://localhost:8000/api/digest
+45 5 * * *         curl -s -X POST http://localhost:8000/api/reconcile
 30 5 1 * *         curl -s -X POST http://localhost:8000/api/review
 ```
 
@@ -117,6 +126,7 @@ vault on the 1st of the month).
 - `POST /api/cycle` — run a decision tick
 - `POST /api/digest` — push the daily summary
 - `POST /api/review` — run the monthly self-review (writes the lessons note)
+- `POST /api/reconcile` — absorb drift between the sleeve books and exchange reality
 - `POST /api/halt` / `POST /api/resume` — the only human controls
 - `POST /api/topup?amount=` — paper mode only; live deposits are auto-detected
 

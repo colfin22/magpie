@@ -204,6 +204,11 @@ def apply_topup(conn, mode: str, amount: float) -> dict:
         conn.execute("UPDATE sleeve_meta SET allocated=allocated+?, hwm=hwm+? "
                      "WHERE mode=? AND sleeve=?", (per, per, mode, s))
     conn.commit()
+    try:  # the phantom hodler buys in with the same cash (#6)
+        from . import ledger
+        ledger.bench_add(conn, mode, amount, market.tickers(config.PAIRS))
+    except Exception as e:  # noqa: BLE001 - benchmark is bookkeeping, never blocks a top-up
+        LOGGER.warning("benchmark top-up skipped: %s", e)
     LOGGER.info("[%s] top-up €%.2f split across active sleeves (€%.2f each)", mode, amount, per)
     return {"topup_eur": amount, "per_sleeve": per}
 
