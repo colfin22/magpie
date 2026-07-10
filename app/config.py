@@ -35,3 +35,44 @@ HA_NOTIFY_SERVICE = os.environ.get("HA_NOTIFY_SERVICE", "")
 
 def mode() -> str:
     return "live" if (TRADING_ENABLED and KRAKEN_API_KEY and KRAKEN_API_SECRET) else "paper"
+
+
+# ---- settings editable from the web page (persist in the DB, survive restart) ----
+# name -> caster ('str' | 'float' | 'csv'). TRADING_ENABLED is deliberately NOT
+# here: going live stays an explicit env decision, never a stray web toggle.
+EDITABLE = {
+    "GEMINI_API_KEY": "str", "GEMINI_MODEL": "str", "GEMINI_MODEL_DEEP": "str",
+    "KRAKEN_API_KEY": "str", "KRAKEN_API_SECRET": "str",
+    "HA_URL": "str", "HA_TOKEN": "str", "HA_NOTIFY_SERVICE": "str",
+    "PAIRS": "csv", "SKIM_FRACTION": "float",
+}
+SECRET_KEYS = {"GEMINI_API_KEY", "KRAKEN_API_KEY", "KRAKEN_API_SECRET", "HA_TOKEN"}
+
+
+def _cast(key: str, raw: str):
+    t = EDITABLE[key]
+    if t == "csv":
+        return [p.strip() for p in raw.split(",") if p.strip()]
+    if t == "float":
+        return float(raw)
+    return raw.rstrip("/") if key == "HA_URL" else raw
+
+
+def apply_overrides(conn) -> None:
+    """Load cfg_* overrides from the DB onto this module. Called at startup and
+    after every settings save, so web-entered keys beat the env and outlive a
+    restart. A credential change invalidates the cached exchange client."""
+    import sys
+    mod = sys.modules[__name__]
+    for key in EDITABLE:
+        row = conn.execute("SELECT value FROM settings WHERE key=?", ("cfg_" + key,)).fetchone()
+        if row is not None:
+            try:
+                setattr(mod, key, _cast(key, row[0]))
+            except Exception:  # noqa: BLE001 - a bad stored value must not break boot
+                pass
+    try:
+        from . import market
+        market._exchange = None
+    except Exception:  # noqa: BLE001
+        pass

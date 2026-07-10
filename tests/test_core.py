@@ -216,3 +216,25 @@ def test_reconcile_distributes_drift(monkeypatch):
         assert ledger.reconcile(conn, "paper", prices)["status"] == "skipped"
     finally:
         conn.close(); os.unlink(p)
+
+
+def test_settings_overrides_apply_and_mask(monkeypatch):
+    from app import config
+    monkeypatch.setattr(config, "GEMINI_API_KEY", "envsecret99", raising=False)
+    monkeypatch.setattr(config, "SKIM_FRACTION", 0.5, raising=False)
+    monkeypatch.setattr(config, "PAIRS", ["BTC/EUR", "ETH/EUR"], raising=False)
+    conn, p = make_db()
+    try:
+        # a saved override lands on the module and casts correctly
+        db.set_setting(conn, "cfg_SKIM_FRACTION", "0.3")
+        db.set_setting(conn, "cfg_PAIRS", "BTC/EUR, SOL/EUR")
+        db.set_setting(conn, "cfg_KRAKEN_API_KEY", "storedkeyWXYZ")
+        config.apply_overrides(conn)
+        assert config.SKIM_FRACTION == 0.3
+        assert config.PAIRS == ["BTC/EUR", "SOL/EUR"]
+        assert config.KRAKEN_API_KEY == "storedkeyWXYZ"
+        # a bad stored value must not crash the load
+        db.set_setting(conn, "cfg_SKIM_FRACTION", "junk")
+        config.apply_overrides(conn)  # should swallow the cast error
+    finally:
+        conn.close(); os.unlink(p)

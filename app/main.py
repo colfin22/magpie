@@ -1,14 +1,22 @@
 import logging
 
-from fastapi import FastAPI
+from fastapi import Body, FastAPI
 from fastapi.responses import HTMLResponse, Response
 
-from . import __version__, config, db, engine, ledger, market, portfolio
+from . import __version__, advisor, config, db, engine, ha, ledger, market, portfolio
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 LOGGER = logging.getLogger(__name__)
 
 app = FastAPI(title="Magpie", version=__version__)
+
+# apply any web-entered settings over the env at boot (before the first cycle)
+try:
+    _c = db.connect()
+    config.apply_overrides(_c)
+    _c.close()
+except Exception as _e:  # noqa: BLE001 - never block startup on settings
+    LOGGER.warning("settings override load failed: %s", _e)
 
 
 @app.middleware("http")
@@ -74,6 +82,78 @@ def api_reconcile():
         return ledger.reconcile(conn, config.mode(), market.tickers(config.PAIRS))
     finally:
         conn.close()
+
+
+def _mask(value: str) -> str:
+    if not value:
+        return ""
+    return "•••• " + value[-4:] if len(value) > 4 else "••••"
+
+
+@app.get("/api/settings")
+def api_settings_get():
+    """Current editable settings — secrets returned masked, never in full."""
+    out = {"mode": config.mode()}
+    for key in config.EDITABLE:
+        val = getattr(config, key)
+        if key in config.SECRET_KEYS:
+            out[key] = {"set": bool(val), "hint": _mask(val)}
+        elif key == "PAIRS":
+            out[key] = ", ".join(val)
+        else:
+            out[key] = val
+    return out
+
+
+@app.post("/api/settings")
+def api_settings_set(body: dict = Body(...)):
+    """Save settings. A blank secret field means 'leave unchanged'; a blank
+    non-secret clears to empty. Going live stays an env decision — not here."""
+    conn = db.connect()
+    try:
+        changed = []
+        for key, raw in body.items():
+            if key not in config.EDITABLE:
+                continue
+            raw = "" if raw is None else str(raw).strip()
+            if key in config.SECRET_KEYS and raw == "":
+                continue  # unchanged
+            try:
+                config._cast(key, raw)  # validate before persisting
+            except Exception as e:  # noqa: BLE001
+                return Response(status_code=400, content=f"{key}: {e}")
+            db.set_setting(conn, "cfg_" + key, raw)
+            changed.append(key)
+        config.apply_overrides(conn)
+        return {"saved": changed, "mode": config.mode()}
+    finally:
+        conn.close()
+
+
+@app.post("/api/settings/test")
+def api_settings_test(target: str):
+    """Probe a configured integration and report a human-readable result."""
+    try:
+        if target == "gemini":
+            raw = advisor.ask('Reply with exactly {"ok": true}')
+            return {"ok": '"ok"' in raw or "ok" in raw.lower(), "detail": raw[:120]}
+        if target == "kraken":
+            bal = market.exchange().fetch_balance()
+            eur = (bal.get("total") or {}).get("EUR")
+            # confirm the key cannot withdraw (the safety guarantee)
+            can_withdraw = True
+            try:
+                market.exchange().private_post_withdrawmethods({"asset": "XBT"})
+            except Exception:  # noqa: BLE001 - denial is what we want
+                can_withdraw = False
+            return {"ok": True, "detail": f"balance readable, EUR {eur}",
+                    "withdrawal_blocked": not can_withdraw}
+        if target == "ha":
+            ok = ha.notify("Magpie test", "Settings page test — notifications are working.")
+            return {"ok": ok, "detail": "check your phone" if ok else "HA not configured / unreachable"}
+        return Response(status_code=400, content="target must be gemini|kraken|ha")
+    except Exception as e:  # noqa: BLE001 - surface the failure to the page
+        return {"ok": False, "detail": str(e)[:200]}
 
 
 @app.post("/api/topup")
@@ -153,7 +233,9 @@ def dashboard():
  .hold{color:#8b93a7}.buy{color:#4cd97b}.sell{color:#ff6b6b}.err{color:#ffb020}
  button{background:#ff6b6b;color:#000;border:0;border-radius:8px;padding:.6rem 1.2rem;font-weight:700}
 </style></head><body>
-<h1>🐦‍⬛ Magpie <span class="dim" id="mode"></span> <span class="dim" id="updated" style="float:right;font-size:.8rem"></span></h1>
+<h1>🐦‍⬛ Magpie <span class="dim" id="mode"></span>
+<span style="float:right;font-size:.8rem"><a href="/settings" style="color:#8b93a7;text-decoration:none">⚙ settings</a>
+<span class="dim" id="updated" style="margin-left:12px"></span></span></h1>
 <div class="card"><div class="dim">Total portfolio</div>
 <div class="big" id="equity">…</div>
 <div id="pnl" style="font-weight:600"></div>
@@ -236,4 +318,106 @@ async function load(){
       `<td class="dim">${(d.reasoning || d.detail || '')}</td></tr>`).join('');
 }
 load(); setInterval(load, 30000);
+</script></body></html>"""
+
+
+@app.get("/settings", response_class=HTMLResponse)
+def settings_page():
+    return """<!doctype html><html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Magpie — settings</title>
+<style>
+ body{font-family:system-ui;margin:1.5rem auto;padding:0 1rem;max-width:640px;
+   background:#12151c;color:#e6e9f0}
+ h1{font-size:1.3rem} a{color:#8b93a7}
+ .dim{color:#8b93a7} .up{color:#4cd97b} .down{color:#ff6b6b}
+ .card{background:#1a1f2b;border:1px solid #262d3c;border-radius:12px;padding:1rem 1.2rem;margin:.9rem 0}
+ .eyebrow{font-size:.68rem;letter-spacing:.1em;text-transform:uppercase;color:#8b93a7;margin:0 0 .8rem}
+ label{display:block;font-size:.8rem;color:#8b93a7;margin:.7rem 0 .2rem}
+ input{width:100%;box-sizing:border-box;background:#12151c;border:1px solid #2a3140;
+   border-radius:8px;color:#e6e9f0;padding:.55rem .7rem;font-size:.9rem;font-family:inherit}
+ input:focus{outline:2px solid #4cd97b55;border-color:#4cd97b}
+ .row{display:flex;gap:.6rem;align-items:center;margin-top:.9rem;flex-wrap:wrap}
+ button{background:#2a3140;color:#e6e9f0;border:1px solid #3a4356;border-radius:8px;
+   padding:.5rem 1rem;font-weight:600;cursor:pointer;font-size:.85rem}
+ button.primary{background:#4cd97b;color:#0a0d12;border:0}
+ button.test{background:transparent;color:#8b93a7}
+ .result{font-size:.8rem;margin-left:.3rem}
+ .note{font-size:.78rem;color:#5a6377;line-height:1.5}
+</style></head><body>
+<h1>🐦‍⬛ Magpie settings <span class="dim" id="mode" style="font-size:.9rem"></span></h1>
+<p class="note"><a href="/">← dashboard</a> · Secrets are stored on this machine only and
+shown masked. Leave a secret field blank to keep the current value. Going <b>live</b> stays a
+deliberate environment change (<code>TRADING_ENABLED</code>), never a setting here.</p>
+
+<div class="card">
+  <p class="eyebrow">The brain — Gemini</p>
+  <label>API key</label><input id="GEMINI_API_KEY" placeholder="">
+  <label>Model (frequent decisions)</label><input id="GEMINI_MODEL">
+  <label>Deep model (slow sleeves + review)</label><input id="GEMINI_MODEL_DEEP">
+  <div class="row"><button class="test" onclick="test('gemini')">Test Gemini</button>
+    <span class="result" id="r-gemini"></span></div>
+</div>
+
+<div class="card">
+  <p class="eyebrow">The exchange — Kraken</p>
+  <p class="note">Create the key with <b>query + trade</b> permissions only — never withdrawal.</p>
+  <label>API key</label><input id="KRAKEN_API_KEY" placeholder="">
+  <label>Private key</label><input id="KRAKEN_API_SECRET" placeholder="">
+  <div class="row"><button class="test" onclick="test('kraken')">Test Kraken</button>
+    <span class="result" id="r-kraken"></span></div>
+</div>
+
+<div class="card">
+  <p class="eyebrow">Notifications — Home Assistant (optional)</p>
+  <label>Base URL</label><input id="HA_URL" placeholder="http://homeassistant.local:8123">
+  <label>Long-lived token</label><input id="HA_TOKEN" placeholder="">
+  <label>Notify service</label><input id="HA_NOTIFY_SERVICE" placeholder="notify.mobile_app_myphone">
+  <div class="row"><button class="test" onclick="test('ha')">Send test push</button>
+    <span class="result" id="r-ha"></span></div>
+</div>
+
+<div class="card">
+  <p class="eyebrow">Strategy</p>
+  <label>Tradeable pairs (comma-separated)</label><input id="PAIRS" placeholder="BTC/EUR, ETH/EUR">
+  <label>Profit skim to vault (0–1)</label><input id="SKIM_FRACTION">
+</div>
+
+<div class="row"><button class="primary" onclick="save()">Save settings</button>
+  <span class="result" id="saved"></span></div>
+
+<script>
+const SECRETS = ["GEMINI_API_KEY","KRAKEN_API_KEY","KRAKEN_API_SECRET","HA_TOKEN"];
+const PLAIN = ["GEMINI_MODEL","GEMINI_MODEL_DEEP","HA_URL","HA_NOTIFY_SERVICE","PAIRS","SKIM_FRACTION"];
+async function load(){
+  const s = await (await fetch('/api/settings',{cache:'no-store'})).json();
+  document.getElementById('mode').textContent = '('+s.mode+')';
+  PLAIN.forEach(k => { if (s[k] !== undefined) document.getElementById(k).value = s[k]; });
+  SECRETS.forEach(k => {
+    const el = document.getElementById(k);
+    el.placeholder = s[k] && s[k].set ? (s[k].hint + " — set, blank to keep") : "not set";
+  });
+}
+async function save(){
+  const body = {};
+  PLAIN.forEach(k => body[k] = document.getElementById(k).value);
+  SECRETS.forEach(k => { const v = document.getElementById(k).value.trim(); if (v) body[k] = v; });
+  const r = await fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify(body)});
+  const el = document.getElementById('saved');
+  if (r.ok){ const j = await r.json(); el.className='result up';
+    el.textContent = '✓ saved '+j.saved.length+' field(s) · mode '+j.mode;
+    SECRETS.forEach(k => document.getElementById(k).value='');
+    load();
+  } else { el.className='result down'; el.textContent = '✗ '+(await r.text()); }
+}
+async function test(t){
+  const el = document.getElementById('r-'+t); el.className='result dim'; el.textContent='testing…';
+  const r = await (await fetch('/api/settings/test?target='+t,{method:'POST'})).json();
+  el.className = 'result '+(r.ok?'up':'down');
+  let msg = (r.ok?'✓ ':'✗ ')+(r.detail||'');
+  if (t==='kraken' && r.ok) msg += r.withdrawal_blocked ? ' · withdrawal blocked ✓' : ' · ⚠ KEY CAN WITHDRAW';
+  el.textContent = msg;
+}
+load();
 </script></body></html>"""

@@ -128,6 +128,7 @@ vault on the 1st of the month).
 - `POST /api/digest` — push the daily summary
 - `POST /api/review` — run the monthly self-review (writes the lessons note)
 - `POST /api/reconcile` — absorb drift between the sleeve books and exchange reality
+- `GET /settings` — a page to enter/change keys and Home Assistant details (secrets masked; test buttons for each integration). Web-entered settings persist and override the env.
 - `POST /api/halt` / `POST /api/resume` — the only human controls
 - `POST /api/topup?amount=` — paper mode only; live deposits are auto-detected
 
