@@ -345,8 +345,10 @@ def settings_page():
  .result{font-size:.8rem;margin-left:.3rem}
  .note{font-size:.78rem;color:#5a6377;line-height:1.5}
 </style></head><body>
+<p style="margin:0 0 1rem"><a href="/" style="display:inline-block;background:#4cd97b;color:#0a0d12;
+  font-weight:700;text-decoration:none;padding:.6rem 1.1rem;border-radius:9px;font-size:.95rem">←&nbsp; Back to dashboard</a></p>
 <h1>🐦‍⬛ Magpie settings <span class="dim" id="mode" style="font-size:.9rem"></span></h1>
-<p class="note"><a href="/">← dashboard</a> · Secrets are stored on this machine only and
+<p class="note">Secrets are stored on this machine only and
 shown masked. Leave a secret field blank to keep the current value. Going <b>live</b> stays a
 deliberate environment change (<code>TRADING_ENABLED</code>), never a setting here.</p>
 
