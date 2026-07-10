@@ -1,0 +1,10 @@
+services:
+  magpie:
+    build: .
+    container_name: magpie
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data:/data
+    env_file: .env
