@@ -482,6 +482,8 @@ deliberate environment change (<code>TRADING_ENABLED</code>), never a setting he
   <label style="margin-top:1rem"><input type="checkbox" id="DYNAMIC_UNIVERSE_ENABLED" style="width:auto;margin-right:.5rem">
     Auto-track the top altcoins by market cap</label>
   <label>How many top altcoins to include</label><input id="DYNAMIC_TOP_N" placeholder="5">
+  <label>Auto-sell a held coin once it drops past rank</label><input id="DYNAMIC_SELL_FLOOR_N" placeholder="10">
+  <p class="note">A held alt that falls out of the top set stays sellable at the bot's discretion until it drops past this rank, then it's force-sold at the weekly refresh. Set equal to the number above to sell the instant a coin leaves the buy set.</p>
   <div class="row"><button class="test" onclick="refreshUniverse()">Refresh universe now</button>
     <span class="result" id="r-universe"></span></div>
 </div>
@@ -498,7 +500,7 @@ deliberate environment change (<code>TRADING_ENABLED</code>), never a setting he
 
 <script>
 const SECRETS = ["GEMINI_API_KEY","KRAKEN_API_KEY","KRAKEN_API_SECRET","HA_TOKEN","DASHBOARD_PASSWORD"];
-const PLAIN = ["GEMINI_MODEL","GEMINI_MODEL_DEEP","HA_URL","HA_NOTIFY_SERVICE","PAIRS","SKIM_FRACTION","DYNAMIC_TOP_N"];
+const PLAIN = ["GEMINI_MODEL","GEMINI_MODEL_DEEP","HA_URL","HA_NOTIFY_SERVICE","PAIRS","SKIM_FRACTION","DYNAMIC_TOP_N","DYNAMIC_SELL_FLOOR_N"];
 async function load(){
   const s = await (await fetch('/api/settings',{cache:'no-store'})).json();
   document.getElementById('mode').textContent = '('+s.mode+')';

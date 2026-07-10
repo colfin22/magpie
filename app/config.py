@@ -21,6 +21,10 @@ BASE_PAIRS = [p.strip() for p in os.environ.get("PAIRS", "BTC/EUR,ETH/EUR").spli
 PAIRS = list(BASE_PAIRS)
 DYNAMIC_UNIVERSE_ENABLED = os.environ.get("DYNAMIC_UNIVERSE", "false").lower() == "true"
 DYNAMIC_TOP_N = int(os.environ.get("DYNAMIC_TOP_N", "5"))
+# a held alt that falls out of the top-N stays sellable at the advisor's discretion
+# (grace band N+1..FLOOR) but is force-sold once it drops past this rank. Must be
+# >= DYNAMIC_TOP_N; set equal to it to sell the instant a coin leaves the buy set.
+DYNAMIC_SELL_FLOOR_N = int(os.environ.get("DYNAMIC_SELL_FLOOR_N", "10"))
 
 START_BALANCE_EUR = float(os.environ.get("START_BALANCE_EUR", "50"))
 SKIM_FRACTION = float(os.environ.get("SKIM_FRACTION", "0.5"))  # share of new profit skimmed to the vault
@@ -56,6 +60,7 @@ EDITABLE = {
     "HA_URL": "str", "HA_TOKEN": "str", "HA_NOTIFY_SERVICE": "str",
     "PAIRS": "csv", "SKIM_FRACTION": "float",
     "DYNAMIC_UNIVERSE_ENABLED": "bool", "DYNAMIC_TOP_N": "int",
+    "DYNAMIC_SELL_FLOOR_N": "int",
     "DASHBOARD_USER": "str", "DASHBOARD_PASSWORD": "str",
 }
 SECRET_KEYS = {"GEMINI_API_KEY", "KRAKEN_API_KEY", "KRAKEN_API_SECRET", "HA_TOKEN",
