@@ -39,6 +39,7 @@ HA_NOTIFY_CLICK_URL = os.environ.get("HA_NOTIFY_CLICK_URL", "")  # tap-to-open U
 
 # login: set a password to gate the UI + control endpoints. Empty = no auth
 # (fine behind your own reverse-proxy auth). Localhost (the timers) is exempt.
+DASHBOARD_USER = os.environ.get("DASHBOARD_USER", "")          # optional username; blank = password only
 DASHBOARD_PASSWORD = os.environ.get("DASHBOARD_PASSWORD", "")
 
 
@@ -55,7 +56,7 @@ EDITABLE = {
     "HA_URL": "str", "HA_TOKEN": "str", "HA_NOTIFY_SERVICE": "str",
     "PAIRS": "csv", "SKIM_FRACTION": "float",
     "DYNAMIC_UNIVERSE_ENABLED": "bool", "DYNAMIC_TOP_N": "int",
-    "DASHBOARD_PASSWORD": "str",
+    "DASHBOARD_USER": "str", "DASHBOARD_PASSWORD": "str",
 }
 SECRET_KEYS = {"GEMINI_API_KEY", "KRAKEN_API_KEY", "KRAKEN_API_SECRET", "HA_TOKEN",
                "DASHBOARD_PASSWORD"}

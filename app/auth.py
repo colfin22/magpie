@@ -42,6 +42,12 @@ def check_password(conn, attempt: str) -> bool:
     return bool(attempt) and hmac.compare_digest(attempt, config.DASHBOARD_PASSWORD)
 
 
+def check_login(conn, user: str, password: str) -> bool:
+    if config.DASHBOARD_USER and (user or "").strip() != config.DASHBOARD_USER:
+        return False
+    return check_password(conn, password)
+
+
 def is_authed(request, conn) -> bool:
     if not enabled():
         return True

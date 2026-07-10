@@ -58,15 +58,16 @@ input{{width:100%;box-sizing:border-box;background:#12151c;border:1px solid #2a3
 color:#e6e9f0;padding:.6rem;font-size:1rem;margin:.5rem 0}}button{{width:100%;background:#4cd97b;color:#0a0d12;
 border:0;border-radius:8px;padding:.6rem;font-weight:700;font-size:1rem;cursor:pointer;margin-top:.5rem}}</style>
 </head><body><form method="post" action="/login"><h1>🐦‍⬛ Magpie</h1>{err}
-<input type="password" name="password" placeholder="Password" autofocus>
+<input type="text" name="username" placeholder="Username" autofocus autocomplete="username">
+<input type="password" name="password" placeholder="Password" autocomplete="current-password">
 <button type="submit">Sign in</button></form></body></html>"""
 
 
 @app.post("/login")
-def login_submit(password: str = Form("")):
+def login_submit(username: str = Form(""), password: str = Form("")):
     conn = db.connect()
     try:
-        if auth.check_password(conn, password):
+        if auth.check_login(conn, username, password):
             resp = RedirectResponse("/", status_code=302)
             resp.set_cookie(auth.COOKIE, auth.token(conn), httponly=True,
                             max_age=30 * 86400, samesite="lax")
