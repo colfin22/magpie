@@ -14,12 +14,13 @@ from . import config
 LOGGER = logging.getLogger(__name__)
 API = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
 
-PROMPT = """You are the sole autonomous manager of a small cryptocurrency spot portfolio
-on Kraken. You decide at scheduled intervals; between decisions the portfolio is
-untouched. Your objective is to grow total EUR value. There is no human oversight
-of individual decisions — be deliberate, and remember every trade costs a
-{fee_pct:.2f}% taker fee, so only act when you have conviction. HOLD is a perfectly
-good decision and will be the right one most of the time.
+PROMPT = """You are the autonomous manager of ONE strategy sleeve of a small
+cryptocurrency spot portfolio on Kraken. You decide at scheduled intervals; between
+decisions the sleeve is untouched. Your objective is to grow this sleeve's EUR value.
+There is no human oversight of individual decisions — be deliberate, and remember
+every trade costs a {fee_pct:.2f}% taker fee. HOLD is a perfectly good decision.
+
+{mandate}
 
 Rules you must follow:
 - You may only trade these pairs: {pairs}
@@ -47,8 +48,9 @@ class AdvisorError(RuntimeError):
 
 
 def build_prompt(portfolio: dict, market_data: list[dict], history: list[dict],
-                 min_order: float) -> str:
+                 min_order: float, mandate: str = "") -> str:
     return PROMPT.format(
+        mandate=mandate,
         fee_pct=config.TAKER_FEE * 100,
         pairs=", ".join(config.PAIRS),
         min_order=min_order,

@@ -1,7 +1,7 @@
 import os
 import sqlite3
 
-from . import config
+from . import config, sleeves
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS candles (
@@ -11,7 +11,7 @@ CREATE TABLE IF NOT EXISTS candles (
 );
 CREATE TABLE IF NOT EXISTS decisions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    at TEXT NOT NULL, mode TEXT NOT NULL,
+    at TEXT NOT NULL, mode TEXT NOT NULL, sleeve TEXT NOT NULL DEFAULT '',
     prompt TEXT, response_raw TEXT,
     action TEXT, pair TEXT, fraction REAL, confidence REAL, reasoning TEXT,
     status TEXT NOT NULL,          -- executed | held | invalid | error | halted | no_key
@@ -19,18 +19,29 @@ CREATE TABLE IF NOT EXISTS decisions (
 );
 CREATE TABLE IF NOT EXISTS orders (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    at TEXT NOT NULL, mode TEXT NOT NULL, decision_id INTEGER,
+    at TEXT NOT NULL, mode TEXT NOT NULL, sleeve TEXT NOT NULL DEFAULT '',
+    decision_id INTEGER,
     pair TEXT NOT NULL, side TEXT NOT NULL,
     amount REAL NOT NULL, price REAL NOT NULL, cost REAL NOT NULL, fee REAL NOT NULL,
     exchange_id TEXT
 );
 CREATE TABLE IF NOT EXISTS holdings (
-    mode TEXT NOT NULL, asset TEXT NOT NULL, amount REAL NOT NULL,
-    PRIMARY KEY (mode, asset)
+    mode TEXT NOT NULL, sleeve TEXT NOT NULL, asset TEXT NOT NULL, amount REAL NOT NULL,
+    PRIMARY KEY (mode, sleeve, asset)
+);
+CREATE TABLE IF NOT EXISTS sleeve_meta (
+    mode TEXT NOT NULL, sleeve TEXT NOT NULL,
+    allocated REAL NOT NULL,        -- initial stake for this sleeve
+    hwm REAL NOT NULL,              -- high-water mark for profit skimming
+    PRIMARY KEY (mode, sleeve)
+);
+CREATE TABLE IF NOT EXISTS skims (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    at TEXT NOT NULL, mode TEXT NOT NULL, sleeve TEXT NOT NULL, amount REAL NOT NULL
 );
 CREATE TABLE IF NOT EXISTS snapshots (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    at TEXT NOT NULL, mode TEXT NOT NULL,
+    at TEXT NOT NULL, mode TEXT NOT NULL, sleeve TEXT NOT NULL DEFAULT '',
     total_eur REAL NOT NULL, holdings TEXT NOT NULL, prices TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS settings (
@@ -47,10 +58,18 @@ def connect(path: str | None = None) -> sqlite3.Connection:
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA busy_timeout=15000")
     conn.executescript(SCHEMA)
-    # paper account starts with the configured stake, once
-    if conn.execute("SELECT 1 FROM holdings WHERE mode='paper' AND asset='EUR'").fetchone() is None:
-        conn.execute("INSERT INTO holdings(mode, asset, amount) VALUES('paper','EUR',?)",
-                     (config.START_BALANCE_EUR,))
+    # seed the paper sleeves once: three equal actives, an empty vault
+    if conn.execute("SELECT 1 FROM sleeve_meta WHERE mode='paper'").fetchone() is None:
+        per = round(config.START_BALANCE_EUR / len(sleeves.ACTIVE), 2)
+        for s in sleeves.ACTIVE:
+            conn.execute("INSERT INTO sleeve_meta(mode, sleeve, allocated, hwm) VALUES('paper',?,?,?)",
+                         (s, per, per))
+            conn.execute("INSERT INTO holdings(mode, sleeve, asset, amount) VALUES('paper',?,'EUR',?)",
+                         (s, per))
+        conn.execute("INSERT INTO sleeve_meta(mode, sleeve, allocated, hwm) VALUES('paper',?,0,0)",
+                     (sleeves.VAULT,))
+        conn.execute("INSERT INTO holdings(mode, sleeve, asset, amount) VALUES('paper',?,'EUR',0)",
+                     (sleeves.VAULT,))
         conn.commit()
     return conn
 

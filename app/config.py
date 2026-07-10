@@ -17,6 +17,7 @@ TRADING_ENABLED = os.environ.get("TRADING_ENABLED", "false").lower() == "true"
 PAIRS = [p.strip() for p in os.environ.get("PAIRS", "BTC/EUR,ETH/EUR").split(",") if p.strip()]
 
 START_BALANCE_EUR = float(os.environ.get("START_BALANCE_EUR", "50"))
+SKIM_FRACTION = float(os.environ.get("SKIM_FRACTION", "0.5"))  # share of new profit skimmed to the vault
 TAKER_FEE = float(os.environ.get("TAKER_FEE", "0.004"))  # Kraken taker, mirrored in paper fills
 
 # notifications (optional, same pattern as the other house apps)
