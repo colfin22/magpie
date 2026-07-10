@@ -71,6 +71,13 @@ def connect(path: str | None = None) -> sqlite3.Connection:
         conn.execute("INSERT INTO holdings(mode, sleeve, asset, amount) VALUES('paper',?,'EUR',0)",
                      (sleeves.VAULT,))
         conn.commit()
+    # live sleeves start as empty shells — the top-up detector funds them from
+    # whatever EUR is actually on the exchange at the first live cycle
+    if conn.execute("SELECT 1 FROM sleeve_meta WHERE mode='live'").fetchone() is None:
+        for s in sleeves.ALL:
+            conn.execute("INSERT INTO sleeve_meta(mode, sleeve, allocated, hwm) VALUES('live',?,0,0)", (s,))
+            conn.execute("INSERT INTO holdings(mode, sleeve, asset, amount) VALUES('live',?,'EUR',0)", (s,))
+        conn.commit()
     return conn
 
 

@@ -12,10 +12,10 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
-def recent_history(conn, sleeve: str, n: int = 10) -> list[dict]:
+def recent_history(conn, mode: str, sleeve: str, n: int = 10) -> list[dict]:
     rows = conn.execute(
         "SELECT at, action, pair, fraction, status, reasoning FROM decisions "
-        "WHERE sleeve=? ORDER BY id DESC LIMIT ?", (sleeve, n)).fetchall()
+        "WHERE mode=? AND sleeve=? ORDER BY id DESC LIMIT ?", (mode, sleeve, n)).fetchall()
     return [dict(r) for r in rows]
 
 
@@ -33,7 +33,7 @@ def _record(conn, mode, sleeve, status, detail="", prompt=None, raw=None, decisi
 def run_sleeve(conn, mode: str, sleeve: str, prices: dict, market_data: list[dict]) -> dict:
     port = portfolio.valued(conn, mode, sleeve, prices)
     prompt = advisor.build_prompt(
-        port, market_data, recent_history(conn, sleeve),
+        port, market_data, recent_history(conn, mode, sleeve),
         min_order=max(portfolio.min_order_eur(p) for p in config.PAIRS),
         mandate=sleeves.MANDATES[sleeve])
     try:
