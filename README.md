@@ -117,4 +117,8 @@ trades, top-ups and the daily digest).
 
 ## Licence
 
-MIT.
+MIT © 2026 [Colm Finn](https://github.com/colfin22).
+
+---
+
+*Built by Colm Finn. The magpie trades alone; the consequences are its keeper's.*
