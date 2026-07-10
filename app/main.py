@@ -190,6 +190,16 @@ def api_resume():
         conn.close()
 
 
+def _next_cycle_iso() -> str:
+    """When the next scheduled decision cycle fires (00/06/12/18 Dublin)."""
+    from datetime import datetime, timedelta
+    from zoneinfo import ZoneInfo
+    now = datetime.now(ZoneInfo("Europe/Dublin"))
+    todays = [now.replace(hour=h, minute=0, second=0, microsecond=0) for h in (0, 6, 12, 18)]
+    future = [t for t in todays if t > now] or [todays[0] + timedelta(days=1)]
+    return min(future).isoformat()
+
+
 @app.get("/api/state")
 def api_state():
     conn = db.connect()
@@ -205,7 +215,8 @@ def api_state():
             "SELECT substr(at,1,16) t, ROUND(SUM(total_eur),2) eur FROM snapshots "
             "WHERE mode=? GROUP BY t ORDER BY t DESC LIMIT 400", (config.mode(),))]
         trips = ledger.round_trips(conn, config.mode())
-        return {"mode": config.mode(), "prices": prices, "overview": ov,
+        return {"mode": config.mode(), "version": __version__, "prices": prices, "overview": ov,
+                "next_cycle": _next_cycle_iso(),
                 "halted": db.get_setting(conn, "halted") == "1",
                 "lessons": {"text": db.get_setting(conn, "lessons"),
                             "at": db.get_setting(conn, "lessons_at")},
@@ -233,10 +244,10 @@ def dashboard():
  .hold{color:#8b93a7}.buy{color:#4cd97b}.sell{color:#ff6b6b}.err{color:#ffb020}
  button{background:#ff6b6b;color:#000;border:0;border-radius:8px;padding:.6rem 1.2rem;font-weight:700}
 </style></head><body>
-<h1>🐦‍⬛ Magpie <span class="dim" id="mode"></span>
+<h1>🐦‍⬛ Magpie <span class="dim" id="mode"></span> <span class="dim" id="ver" style="font-size:.8rem"></span>
 <span style="float:right;font-size:.8rem"><a href="/settings" style="color:#8b93a7;text-decoration:none">⚙ settings</a>
 <span class="dim" id="updated" style="margin-left:12px"></span></span></h1>
-<div class="card"><div class="dim">Total portfolio</div>
+<div class="card"><div class="dim">Total portfolio <span id="nextcheck" style="float:right"></span></div>
 <div class="big" id="equity">…</div>
 <div id="pnl" style="font-weight:600"></div>
 <div id="vs" class="dim" style="margin-top:.6rem;padding-top:.6rem;border-top:1px solid #2a3140;line-height:1.5"></div>
@@ -253,6 +264,13 @@ def dashboard():
 async function load(){
   const s = await (await fetch('/api/state', {cache: 'no-store'})).json();
   document.getElementById('updated').textContent = 'updated ' + new Date().toLocaleTimeString();
+  if (s.version) document.getElementById('ver').textContent = 'v' + s.version;
+  if (s.next_cycle) {
+    const n = new Date(s.next_cycle), mins = Math.max(0, Math.round((n - Date.now()) / 60000));
+    document.getElementById('nextcheck').textContent =
+      `next decision ${n.toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'})}` +
+      ` · in ${Math.floor(mins / 60)}h ${mins % 60}m`;
+  }
   const modeEl = document.getElementById('mode');
   modeEl.textContent = `(${s.mode}${s.halted ? " — HALTED" : ""})`;
   modeEl.className = s.halted ? 'down' : (s.mode === 'live' ? 'up' : 'dim');
