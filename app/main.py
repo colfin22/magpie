@@ -3,7 +3,7 @@ import logging
 from fastapi import Body, FastAPI
 from fastapi.responses import HTMLResponse, Response
 
-from . import __version__, advisor, config, db, engine, ha, ledger, market, portfolio
+from . import __version__, advisor, config, db, engine, ha, ledger, market, portfolio, universe
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 LOGGER = logging.getLogger(__name__)
@@ -84,6 +84,26 @@ def api_reconcile():
         conn.close()
 
 
+@app.get("/api/universe")
+def api_universe():
+    """The current tradeable universe: base + dynamic top-alt set."""
+    conn = db.connect()
+    try:
+        return universe.current(conn)
+    finally:
+        conn.close()
+
+
+@app.post("/api/universe/refresh")
+def api_universe_refresh():
+    """Re-detect the top-N altcoins and update the universe (weekly timer + manual)."""
+    conn = db.connect()
+    try:
+        return universe.refresh(conn)
+    finally:
+        conn.close()
+
+
 def _mask(value: str) -> str:
     if not value:
         return ""
@@ -99,7 +119,7 @@ def api_settings_get():
         if key in config.SECRET_KEYS:
             out[key] = {"set": bool(val), "hint": _mask(val)}
         elif key == "PAIRS":
-            out[key] = ", ".join(val)
+            out[key] = ", ".join(config.BASE_PAIRS)  # the field edits the base, not the effective set
         else:
             out[key] = val
     return out
@@ -399,8 +419,13 @@ deliberate environment change (<code>TRADING_ENABLED</code>), never a setting he
 
 <div class="card">
   <p class="eyebrow">Strategy</p>
-  <label>Tradeable pairs (comma-separated)</label><input id="PAIRS" placeholder="BTC/EUR, ETH/EUR">
+  <label>Base pairs — always tradeable (comma-separated)</label><input id="PAIRS" placeholder="BTC/EUR, ETH/EUR">
   <label>Profit skim to vault (0–1)</label><input id="SKIM_FRACTION">
+  <label style="margin-top:1rem"><input type="checkbox" id="DYNAMIC_UNIVERSE_ENABLED" style="width:auto;margin-right:.5rem">
+    Auto-track the top altcoins by market cap</label>
+  <label>How many top altcoins to include</label><input id="DYNAMIC_TOP_N" placeholder="5">
+  <div class="row"><button class="test" onclick="refreshUniverse()">Refresh universe now</button>
+    <span class="result" id="r-universe"></span></div>
 </div>
 
 <div class="row"><button class="primary" onclick="save()">Save settings</button>
@@ -408,19 +433,27 @@ deliberate environment change (<code>TRADING_ENABLED</code>), never a setting he
 
 <script>
 const SECRETS = ["GEMINI_API_KEY","KRAKEN_API_KEY","KRAKEN_API_SECRET","HA_TOKEN"];
-const PLAIN = ["GEMINI_MODEL","GEMINI_MODEL_DEEP","HA_URL","HA_NOTIFY_SERVICE","PAIRS","SKIM_FRACTION"];
+const PLAIN = ["GEMINI_MODEL","GEMINI_MODEL_DEEP","HA_URL","HA_NOTIFY_SERVICE","PAIRS","SKIM_FRACTION","DYNAMIC_TOP_N"];
 async function load(){
   const s = await (await fetch('/api/settings',{cache:'no-store'})).json();
   document.getElementById('mode').textContent = '('+s.mode+')';
   PLAIN.forEach(k => { if (s[k] !== undefined) document.getElementById(k).value = s[k]; });
+  document.getElementById('DYNAMIC_UNIVERSE_ENABLED').checked = !!s.DYNAMIC_UNIVERSE_ENABLED;
   SECRETS.forEach(k => {
     const el = document.getElementById(k);
     el.placeholder = s[k] && s[k].set ? (s[k].hint + " — set, blank to keep") : "not set";
   });
 }
+async function refreshUniverse(){
+  const el = document.getElementById('r-universe'); el.className='result dim'; el.textContent='refreshing…';
+  const r = await (await fetch('/api/universe/refresh',{method:'POST'})).json();
+  el.className = 'result ' + (r.status==='ok' ? 'up' : 'down');
+  el.textContent = r.status==='ok' ? ('✓ now: ' + (r.effective||[]).join(', ')) : ('✗ ' + (r.detail||r.status));
+}
 async function save(){
   const body = {};
   PLAIN.forEach(k => body[k] = document.getElementById(k).value);
+  body.DYNAMIC_UNIVERSE_ENABLED = document.getElementById('DYNAMIC_UNIVERSE_ENABLED').checked;
   SECRETS.forEach(k => { const v = document.getElementById(k).value.trim(); if (v) body[k] = v; });
   const r = await fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},
     body:JSON.stringify(body)});

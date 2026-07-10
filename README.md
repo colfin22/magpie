@@ -140,6 +140,16 @@ Everything is env vars — see [`.env.example`](.env.example). Notables:
 `HA_URL`/`HA_TOKEN`/`HA_NOTIFY_SERVICE` (optional Home Assistant pushes for
 trades, top-ups and the daily digest).
 
+
+## Dynamic universe (optional)
+
+With `DYNAMIC_UNIVERSE=true`, the tradeable set is your base pairs plus the
+top-`DYNAMIC_TOP_N` (default 5) altcoins by market cap that trade against EUR
+on Kraken — stablecoins and wrapped/staked tokens excluded. It refreshes on a
+weekly timer (`POST /api/universe/refresh`), pushes a heads-up when the set
+changes, and never strands a position: a coin that falls out of the top-N but
+is still held stays sellable until closed. `GET /api/universe` shows it.
+
 ## Licence
 
 MIT © 2026 [Colm Finn](https://github.com/colfin22).
