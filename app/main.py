@@ -171,7 +171,9 @@ def dashboard():
 async function load(){
   const s = await (await fetch('/api/state', {cache: 'no-store'})).json();
   document.getElementById('updated').textContent = 'updated ' + new Date().toLocaleTimeString();
-  document.getElementById('mode').textContent = `(${s.mode}${s.halted ? " — HALTED" : ""})`;
+  const modeEl = document.getElementById('mode');
+  modeEl.textContent = `(${s.mode}${s.halted ? " — HALTED" : ""})`;
+  modeEl.className = s.halted ? 'down' : (s.mode === 'live' ? 'up' : 'dim');
   document.getElementById('equity').textContent = `€${s.overview.total_eur.toFixed(2)}`;
   document.getElementById('halted').textContent = s.halted ? " halted — POST /api/resume to re-arm" : "";
   document.getElementById('sleeves').innerHTML = s.overview.sleeves.map(v => {
