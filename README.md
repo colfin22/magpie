@@ -14,8 +14,9 @@ digest. Your only control is the halt button — by design.
 > from slow bleed to pleasant surprise. The house always takes 0.4% a trade.
 
 <p align="center">
-  <img src="docs/screenshots/dashboard.png" width="92%"
-       alt="The Magpie dashboard — total equity, the four sleeves, and the decision diary with the model's reasoning">
+  <img src="docs/screenshots/dashboard-preview.png" width="92%"
+       alt="The Magpie dashboard — equity vs buy-and-hold, the four sleeves, closed trades, vault skims, the monthly lessons note and the decision diary">
+  <br><sub>Dashboard six weeks in (simulated preview data — a fresh install starts humbler).</sub>
 </p>
 
 ## How it thinks

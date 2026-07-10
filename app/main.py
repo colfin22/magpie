@@ -127,6 +127,8 @@ def api_state():
         trips = ledger.round_trips(conn, config.mode())
         return {"mode": config.mode(), "prices": prices, "overview": ov,
                 "halted": db.get_setting(conn, "halted") == "1",
+                "lessons": {"text": db.get_setting(conn, "lessons"),
+                            "at": db.get_setting(conn, "lessons_at")},
                 "benchmark": ledger.bench_value(conn, config.mode(), prices),
                 "equity_curve": list(reversed(curve)),
                 "trips": trips[:15], "trip_stats": ledger.trip_stats(trips),
@@ -152,12 +154,16 @@ def dashboard():
  button{background:#ff6b6b;color:#000;border:0;border-radius:8px;padding:.6rem 1.2rem;font-weight:700}
 </style></head><body>
 <h1>🐦‍⬛ Magpie <span class="dim" id="mode"></span> <span class="dim" id="updated" style="float:right;font-size:.8rem"></span></h1>
-<div class="card"><div class="dim">Total <span id="bench" style="float:right"></span></div>
+<div class="card"><div class="dim">Total portfolio</div>
 <div class="big" id="equity">…</div>
+<div id="pnl" style="font-weight:600"></div>
+<div id="vs" class="dim" style="margin-top:.6rem;padding-top:.6rem;border-top:1px solid #2a3140;line-height:1.5"></div>
 <svg id="chart" viewBox="0 0 600 120" preserveAspectRatio="none"
      style="width:100%;height:120px;margin-top:.5rem"></svg></div>
 <div class="row" id="sleeves"></div>
 <div class="card"><div class="dim">Closed trades <span id="tstats" style="float:right"></span></div><table id="trades"></table></div>
+<div class="card" id="lessons-card" hidden><div class="dim" id="lessons-when"></div>
+<p class="dim" id="lessons-text" style="font-size:.85rem;line-height:1.55;margin:.4rem 0 0"></p></div>
 <div class="card"><div class="dim">Recent decisions</div><table id="log"></table></div>
 <div class="card"><button onclick="if(confirm('Halt all trading?'))fetch('/api/halt',{method:'POST'}).then(()=>load())">⛔ HALT TRADING</button>
 <span class="dim" id="halted"></span></div>
@@ -176,13 +182,29 @@ async function load(){
       `<div class="${d >= 0 ? 'up' : 'down'}">${d >= 0 ? '+' : ''}${d.toFixed(2)}</div>` +
       `<div class="dim">${assets.length ? assets.join(', ') : 'in cash'}</div></div>`;
   }).join('');
-  // benchmark line
+  // hero: P/L on invested + the vs-hodl sentence (#9)
+  const invested = s.overview.sleeves.reduce((a, v) => a + (v.allocated || 0), 0);
+  const pnl = s.overview.total_eur - invested;
+  const pnlEl = document.getElementById('pnl');
+  pnlEl.textContent = invested > 0
+    ? `${pnl >= 0 ? '+' : '−'}€${Math.abs(pnl).toFixed(2)} (${(pnl / invested * 100).toFixed(1)}%) on €${invested.toFixed(2)} invested`
+    : '';
+  pnlEl.className = pnl >= 0 ? 'up' : 'down';
+  const vsEl = document.getElementById('vs');
   if (s.benchmark) {
     const edge = s.overview.total_eur - s.benchmark.hodl_eur;
-    const el = document.getElementById('bench');
-    el.textContent = `hodl €${s.benchmark.hodl_eur.toFixed(2)} · bot ${edge >= 0 ? '+' : ''}${edge.toFixed(2)}`;
-    el.className = edge >= 0 ? 'up' : 'down';
-  }
+    vsEl.innerHTML = `vs buy-and-hold <b style="color:#e6e9f0">€${s.benchmark.hodl_eur.toFixed(2)}</b><br>` +
+      `the magpie is <b class="${edge >= 0 ? 'up' : 'down'}">${edge >= 0 ? '+' : '−'}€${Math.abs(edge).toFixed(2)} ` +
+      `${edge >= 0 ? 'ahead of' : 'behind'} doing nothing</b>`;
+  } else { vsEl.textContent = ''; }
+  // lessons note (appears after the first monthly self-review)
+  const lc = document.getElementById('lessons-card');
+  if (s.lessons && s.lessons.text) {
+    lc.hidden = false;
+    document.getElementById('lessons-when').textContent =
+      'Lessons note · self-review ' + (s.lessons.at || '').slice(0, 10);
+    document.getElementById('lessons-text').textContent = '"' + s.lessons.text + '"';
+  } else { lc.hidden = true; }
   // equity sparkline
   const c = s.equity_curve || [];
   if (c.length > 1) {
