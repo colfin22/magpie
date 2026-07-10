@@ -1,5 +1,8 @@
 # 🐦‍⬛ Magpie
 
+[![CI](https://github.com/colfin22/magpie/actions/workflows/ci.yml/badge.svg)](https://github.com/colfin22/magpie/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+
 An autonomous, self-hosted crypto trading bot with an LLM for a brain. You give it
 a small stake on Kraken and a Gemini API key; it manages the money on its own
 schedule, keeps a full written diary of every thought, and pushes you a daily
