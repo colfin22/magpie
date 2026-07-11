@@ -450,10 +450,9 @@ def api_resume():
 
 
 def _next_cycle_iso() -> str:
-    """When the next scheduled decision cycle fires (00/06/12/18 Dublin)."""
+    """When the next scheduled decision cycle fires (00/06/12/18 local time)."""
     from datetime import datetime, timedelta
-    from zoneinfo import ZoneInfo
-    now = datetime.now(ZoneInfo("Europe/Dublin"))
+    now = datetime.now(config.tz())
     todays = [now.replace(hour=h, minute=0, second=0, microsecond=0) for h in (0, 6, 12, 18)]
     future = [t for t in todays if t > now] or [todays[0] + timedelta(days=1)]
     return min(future).isoformat()
@@ -695,6 +694,13 @@ deliberate environment change (<code>TRADING_ENABLED</code>), never a setting he
 </div>
 
 <div class="card">
+  <p class="eyebrow">Location</p>
+  <label>Timezone</label>
+  <input id="TIMEZONE" placeholder="Europe/Dublin">
+  <p class="note">Your IANA timezone — e.g. <code>America/New_York</code>, <code>Europe/London</code>, <code>Australia/Sydney</code>. Sets the clock the daily 06:00, Monday and 1st-of-month decision slots run on; match it to the schedule you set. Safe to change anytime.</p>
+</div>
+
+<div class="card">
   <p class="eyebrow">Strategy</p>
   <label>Base pairs — always tradeable (comma-separated)</label><input id="PAIRS" placeholder="BTC/EUR, ETH/EUR">
   <label>Profit skim to vault (0–1)</label><input id="SKIM_FRACTION">
@@ -762,7 +768,7 @@ deliberate environment change (<code>TRADING_ENABLED</code>), never a setting he
 
 <script>
 const SECRETS = ["GEMINI_API_KEY","OPENAI_API_KEY","ANTHROPIC_API_KEY","PERPLEXITY_API_KEY","GROK_API_KEY","DEEPSEEK_API_KEY","GITHUB_TOKEN","OPENROUTER_API_KEY","KRAKEN_API_KEY","KRAKEN_API_SECRET","HA_TOKEN","DASHBOARD_PASSWORD"];
-const PLAIN = ["LLM_MODEL","LLM_MODEL_DEEP","GEMINI_MODEL","GEMINI_MODEL_DEEP","HA_URL","HA_NOTIFY_SERVICE","PAIRS","SKIM_FRACTION","DYNAMIC_TOP_N","DYNAMIC_SELL_FLOOR_N"];
+const PLAIN = ["LLM_MODEL","LLM_MODEL_DEEP","GEMINI_MODEL","GEMINI_MODEL_DEEP","HA_URL","HA_NOTIFY_SERVICE","PAIRS","SKIM_FRACTION","DYNAMIC_TOP_N","DYNAMIC_SELL_FLOOR_N","TIMEZONE"];
 async function load(){
   const s = await (await fetch('/api/settings',{cache:'no-store'})).json();
   document.getElementById('mode').textContent = '('+s.mode+')';

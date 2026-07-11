@@ -84,6 +84,18 @@ DYNAMIC_TOP_N = int(os.environ.get("DYNAMIC_TOP_N", "5"))
 # >= DYNAMIC_TOP_N; set equal to it to sell the instant a coin leaves the buy set.
 DYNAMIC_SELL_FLOOR_N = int(os.environ.get("DYNAMIC_SELL_FLOOR_N", "10"))
 
+# location / timezone (IANA name) — the clock the daily 06:00, Monday and 1st-of-
+# month decision slots run on. Safe to change (no money implication); drives
+# sleeves.due(). Default keeps existing installs on Irish time.
+TIMEZONE = os.environ.get("TIMEZONE", "Europe/Dublin")
+
+
+def tz():
+    import sys
+    from zoneinfo import ZoneInfo
+    return ZoneInfo(sys.modules[__name__].TIMEZONE)
+
+
 START_BALANCE_EUR = float(os.environ.get("START_BALANCE_EUR", "50"))
 SKIM_FRACTION = float(os.environ.get("SKIM_FRACTION", "0.5"))  # share of new profit skimmed to the vault
 TAKER_FEE = float(os.environ.get("TAKER_FEE", "0.004"))   # market-order fee (fallback fills)
@@ -120,7 +132,7 @@ EDITABLE = {
     "OPENROUTER_API_KEY": "str",
     "KRAKEN_API_KEY": "str", "KRAKEN_API_SECRET": "str",
     "HA_URL": "str", "HA_TOKEN": "str", "HA_NOTIFY_SERVICE": "str",
-    "PAIRS": "csv", "MANUAL_PAIRS": "csv", "SKIM_FRACTION": "float",
+    "PAIRS": "csv", "MANUAL_PAIRS": "csv", "SKIM_FRACTION": "float", "TIMEZONE": "str",
     "DYNAMIC_UNIVERSE_ENABLED": "bool", "DYNAMIC_TOP_N": "int",
     "DYNAMIC_SELL_FLOOR_N": "int",
     "DASHBOARD_USER": "str", "DASHBOARD_PASSWORD": "str",
@@ -142,6 +154,14 @@ def _cast(key: str, raw: str):
         return int(raw)
     if t == "bool":
         return str(raw).strip().lower() in ("true", "1", "yes", "on")
+    if key == "TIMEZONE":
+        from zoneinfo import ZoneInfo
+        tzn = raw.strip() or "Europe/Dublin"
+        try:
+            ZoneInfo(tzn)
+        except Exception as e:  # noqa: BLE001
+            raise ValueError(f"unknown timezone {tzn!r} — use an IANA name like Europe/Dublin") from e
+        return tzn
     if key == "LLM_PROVIDER":
         p = raw.strip().lower()
         if p and p not in VALID_PROVIDERS:

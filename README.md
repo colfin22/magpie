@@ -207,6 +207,11 @@ has traded — it **locks permanently**, because switching it on a funded accoun
 would leave your holdings and exchange balance in the wrong currency. Choose it
 before funding.
 
+**Timezone.** Set `TIMEZONE` (an IANA name like `America/New_York`, default
+`Europe/Dublin`) — or pick it on the settings page — so the daily 06:00, Monday
+and 1st-of-month decision slots run on your local clock. It's safe to change
+anytime; align it with the schedule you set below.
+
 Everything else is env vars — see [`.env.example`](.env.example). Notables:
 `LLM_PROVIDER` (which brain; default `gemini`) and its matching API key,
 `LLM_MODEL` / `LLM_MODEL_DEEP` (optional model overrides), `PAIRS` (the base

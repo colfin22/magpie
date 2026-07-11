@@ -5,9 +5,8 @@ mandate text in the prompt, and its own decision cadence. The vault starts
 empty and is funded exclusively by profit skims from the other three.
 """
 from datetime import datetime
-from zoneinfo import ZoneInfo
 
-TZ = ZoneInfo("Europe/Dublin")
+from . import config
 
 ACTIVE = ["swing", "fortnight", "quarter"]  # split the starting stake equally
 VAULT = "vault"
@@ -38,11 +37,14 @@ MANDATES = {
 
 
 def due(sleeve: str, now: datetime | None = None) -> bool:
-    """Is this sleeve's decision slot at the given (Dublin) time?
+    """Is this sleeve's decision slot at the given local time?
 
-    Timers fire at 00/06/12/18 IST; the hour gates the slower sleeves.
+    Timers fire at 00/06/12/18 in config.TIMEZONE; the hour gates the slower
+    sleeves. swing decides every cycle; fortnight daily at 06:00; quarter on
+    Mondays at 06:00; the vault on the 1st of the month at 06:00.
     """
-    n = (now or datetime.now(TZ)).astimezone(TZ)
+    tz = config.tz()
+    n = (now or datetime.now(tz)).astimezone(tz)
     if sleeve == "swing":
         return True
     if sleeve == "fortnight":

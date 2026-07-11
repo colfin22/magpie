@@ -67,3 +67,28 @@ def test_currency_endpoints_set_and_lock(monkeypatch, tmp_path):
     assert config.BASE_CURRENCY == "USD"                 # applied live
     assert c.get("/api/currency").json()["locked"] is True
     assert c.post("/api/currency/set", json={"currency": "gbp"}).status_code == 400   # locked now
+
+
+def test_timezone_drives_sleeve_due(monkeypatch):
+    from datetime import datetime, timezone
+    from app import sleeves
+    # 10:00 UTC is 06:00 in New York (EDT, UTC-4) but 11:00 in Dublin (IST, UTC+1)
+    t = datetime(2026, 7, 6, 10, 0, tzinfo=timezone.utc)   # a Monday
+    monkeypatch.setattr(config, "TIMEZONE", "America/New_York")
+    assert sleeves.due("fortnight", t) is True             # 06:00 NY -> daily slot fires
+    assert sleeves.due("quarter", t) is True               # Monday 06:00 NY
+    monkeypatch.setattr(config, "TIMEZONE", "Europe/Dublin")
+    assert sleeves.due("fortnight", t) is False            # 11:00 Dublin -> not the slot
+    assert sleeves.due("swing", t) is True                 # swing every cycle regardless
+
+
+def test_timezone_validation(monkeypatch):
+    assert config._cast("TIMEZONE", "America/New_York") == "America/New_York"
+    assert config._cast("TIMEZONE", "") == "Europe/Dublin"
+    with pytest.raises(ValueError):
+        config._cast("TIMEZONE", "Mars/Olympus_Mons")
+
+
+def test_tz_helper(monkeypatch):
+    monkeypatch.setattr(config, "TIMEZONE", "Europe/London")
+    assert str(config.tz()) == "Europe/London"
