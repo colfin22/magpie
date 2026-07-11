@@ -76,7 +76,7 @@ def run_sleeve(conn, mode: str, sleeve: str, prices: dict, market_data: list[dic
     conn.commit()
     if mode == "live":
         ha.notify(f"Magpie [{sleeve}] traded",
-                  f"{order['side'].upper()} {order['pair']}: €{order['cost_eur']} "
+                  f"{order['side'].upper()} {order['pair']}: {config.symbol()}{order['cost_eur']} "
                   f"@ {order['price']:.2f} — {decision['reasoning'][:140]}")
     return {"sleeve": sleeve, "status": "executed", "order": order,
             "reasoning": decision["reasoning"]}
@@ -112,8 +112,8 @@ def run_cycle(now=None) -> dict:
             topup = portfolio.detect_topup(conn, mode)
             if topup:
                 ha.notify("Magpie top-up detected",
-                          f"€{topup['topup_eur']} new cash split three ways "
-                          f"(€{topup['per_sleeve']} per sleeve)")
+                          f"{config.symbol()}{topup['topup_eur']} new cash split three ways "
+                          f"({config.symbol()}{topup['per_sleeve']} per sleeve)")
         except Exception as e:  # noqa: BLE001 - a balance blip must not stop the cycle
             LOGGER.warning("top-up detection failed: %s", e)
 
@@ -158,15 +158,15 @@ def daily_digest() -> dict:
         trades = conn.execute("SELECT COUNT(*) c FROM orders WHERE at >= date('now')").fetchone()["c"]
         bits = []
         for v in ov["sleeves"]:
-            assets = [k for k in v["holdings"] if k != "EUR"]
-            bits.append(f"{v['sleeve']} €{v['total_eur']:.2f}"
+            assets = [k for k in v["holdings"] if k != config.BASE_CURRENCY]
+            bits.append(f"{v['sleeve']} {config.symbol()}{v['total_eur']:.2f}"
                         + (f" ({'+'.join(assets)})" if assets else ""))
         bench = ledger.bench_value(conn, mode, prices)
         vs = ""
         if bench:
             edge = ov["total_eur"] - bench["hodl_eur"]
-            vs = f" · vs hodl €{bench['hodl_eur']:.2f} ({'+' if edge >= 0 else ''}{edge:.2f})"
-        msg = (f"[{mode}] €{ov['total_eur']:.2f} ({'+' if delta >= 0 else ''}{delta:.2f} today), "
+            vs = f" · vs hodl {config.symbol()}{bench['hodl_eur']:.2f} ({'+' if edge >= 0 else ''}{edge:.2f})"
+        msg = (f"[{mode}] {config.symbol()}{ov['total_eur']:.2f} ({'+' if delta >= 0 else ''}{delta:.2f} today), "
                f"{trades} trades{vs}. " + " · ".join(bits))
         pushed = ha.notify("Magpie daily digest", msg)
         return {"pushed": pushed, "summary": msg}

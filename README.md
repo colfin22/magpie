@@ -162,7 +162,14 @@ vault on the 1st of the month).
 
 ## Configuration
 
-Everything is env vars — see [`.env.example`](.env.example). Notables:
+**Base currency.** Magpie trades against and values everything in one currency —
+EUR by default, or USD, GBP, etc. It's a **one-time choice at initial setup**
+(Settings → Base currency): the moment you set it — and automatically once the bot
+has traded — it **locks permanently**, because switching it on a funded account
+would leave your holdings and exchange balance in the wrong currency. Choose it
+before funding.
+
+Everything else is env vars — see [`.env.example`](.env.example). Notables:
 `LLM_PROVIDER` (which brain; default `gemini`) and its matching API key,
 `LLM_MODEL` / `LLM_MODEL_DEEP` (optional model overrides), `PAIRS` (the base
 tradeable universe, default BTC/EUR + ETH/EUR), `SKIM_FRACTION` (profit share

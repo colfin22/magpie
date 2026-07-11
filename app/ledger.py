@@ -52,8 +52,8 @@ def bench_value(conn, mode: str, prices: dict[str, float]) -> dict | None:
     if not raw:
         return None
     b = json.loads(raw)
-    value = sum(amt * prices[f"{asset}/EUR"] for asset, amt in b["assets"].items()
-                if f"{asset}/EUR" in prices)
+    value = sum(amt * prices[f"{asset}/{config.BASE_CURRENCY}"] for asset, amt in b["assets"].items()
+                if f"{asset}/{config.BASE_CURRENCY}" in prices)
     return {"hodl_eur": round(value, 2), "invested": round(b["invested"], 2),
             "since": b["since"]}
 
@@ -124,7 +124,7 @@ def reconcile(conn, mode: str, prices: dict[str, float],
     if actual is None:
         actual = {k: float(v or 0) for k, v in
                   (market.exchange().fetch_balance().get("total") or {}).items()}
-    assets = {"EUR"} | {p.split("/")[0] for p in config.PAIRS}
+    assets = {config.BASE_CURRENCY} | {p.split("/")[0] for p in config.PAIRS}
     adjusted, drift_value = [], 0.0
     for asset in sorted(assets):
         booked = conn.execute(
@@ -132,8 +132,8 @@ def reconcile(conn, mode: str, prices: dict[str, float],
             (asset,)).fetchone()["s"]
         act = actual.get(asset, 0.0)
         drift = act - booked
-        px = 1.0 if asset == "EUR" else prices.get(f"{asset}/EUR", 0.0)
-        if asset == "EUR" and drift > portfolio.TOPUP_EPSILON_EUR:
+        px = 1.0 if asset == config.BASE_CURRENCY else prices.get(f"{asset}/{config.BASE_CURRENCY}", 0.0)
+        if asset == config.BASE_CURRENCY and drift > portfolio.TOPUP_EPSILON_EUR:
             continue  # a deposit — the top-up detector's job, not ours
         if abs(drift * px) < 0.05:
             continue  # dust
@@ -157,6 +157,6 @@ def reconcile(conn, mode: str, prices: dict[str, float],
     conn.commit()
     if drift_value >= RECONCILE_ALERT_EUR:
         ha.notify("Magpie reconciliation drift",
-                  f"Books were €{drift_value:.2f} off exchange reality and have been "
+                  f"Books were {config.symbol()}{drift_value:.2f} off exchange reality and have been "
                   f"corrected: {json.dumps(adjusted)}. Manual trades or a bug?")
     return {"status": "ok", "adjusted": adjusted, "drift_eur": round(drift_value, 2)}

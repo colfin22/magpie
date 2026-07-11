@@ -25,15 +25,16 @@ EXCLUDE = {
 }
 
 
-def resolve_pair(symbol: str) -> str:
-    """Normalise a user-typed coin to an EUR spot pair (e.g. 'ada' -> 'ADA/EUR')."""
-    s = (symbol or "").strip().upper().replace(" ", "")
+def resolve_pair(sym: str) -> str:
+    """Normalise a user-typed coin to a base-currency spot pair ('ada' -> 'ADA/EUR')."""
+    q = config.BASE_CURRENCY
+    s = (sym or "").strip().upper().replace(" ", "")
     if not s:
         raise ValueError("enter a coin symbol")
     if "/" not in s:
-        s = f"{s}/EUR"
-    if not s.endswith("/EUR"):
-        raise ValueError("Magpie trades in EUR — add an X/EUR pair")
+        s = f"{s}/{q}"
+    if not s.endswith(f"/{q}"):
+        raise ValueError(f"Magpie trades in {q} — add an X/{q} pair")
     return s
 
 
@@ -54,8 +55,8 @@ def top_alt_pairs(n: int, http: httpx.Client | None = None) -> list[str]:
     own = http is None
     http = http or httpx.Client(timeout=20)
     try:
-        r = http.get(CG_MARKETS, params={"vs_currency": "eur", "order": "market_cap_desc",
-                                         "per_page": 50, "page": 1})
+        r = http.get(CG_MARKETS, params={"vs_currency": config.BASE_CURRENCY.lower(),
+                                         "order": "market_cap_desc", "per_page": 50, "page": 1})
         r.raise_for_status()
         coins = r.json()
     finally:
@@ -71,7 +72,7 @@ def top_alt_pairs(n: int, http: httpx.Client | None = None) -> list[str]:
         sym = (c.get("symbol") or "").upper()
         if not sym or sym in EXCLUDE:
             continue
-        pair = f"{sym}/EUR"
+        pair = f"{sym}/{config.BASE_CURRENCY}"
         m = markets.get(pair)
         if m and m.get("active") and m.get("spot"):
             out.append(pair)
@@ -85,8 +86,8 @@ def _held_pairs(conn) -> set[str]:
     held = set()
     for s in sleeves.ALL:
         for asset in portfolio.holdings(conn, config.mode(), s):
-            if asset != "EUR":
-                held.add(f"{asset}/EUR")
+            if asset != config.BASE_CURRENCY:
+                held.add(f"{asset}/{config.BASE_CURRENCY}")
     return held
 
 
@@ -180,8 +181,8 @@ def refresh(conn, notify: bool = True, http: httpx.Client | None = None) -> dict
             msg += f" Dropped: {', '.join(removed)}."
         if sold:
             total = sum(x["eur"] for x in sold)
-            names = ", ".join(f"{x['pair']} (€{x['eur']:.2f}, {x['sleeve']})" for x in sold)
-            msg += f" Auto-sold past the top-{floor_n} floor: {names} — €{total:.2f} total."
+            names = ", ".join(f"{x['pair']} ({config.symbol()}{x['eur']:.2f}, {x['sleeve']})" for x in sold)
+            msg += f" Auto-sold past the top-{floor_n} floor: {names} — {config.symbol()}{total:.2f} total."
         ha.notify("Magpie universe updated", msg)
     LOGGER.info("universe refresh: dynamic=%s added=%s removed=%s sold=%s",
                 dynamic, added, removed, sold)

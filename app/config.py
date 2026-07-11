@@ -32,9 +32,48 @@ KRAKEN_API_SECRET = os.environ.get("KRAKEN_API_SECRET", "")
 # TRADING_ENABLED=true + Kraken keys = real money; anything else = paper
 TRADING_ENABLED = os.environ.get("TRADING_ENABLED", "false").lower() == "true"
 
+# the base/quote currency: the coin every pair trades against, the cash asset in
+# the books, and the money everything is valued and displayed in. Chosen ONCE at
+# initial setup then LOCKED (a `base_currency` row in settings is the source of
+# truth; the env is only the pre-lock default). Never change it on a funded account.
+BASE_CURRENCY = os.environ.get("BASE_CURRENCY", "EUR").upper()
+SUPPORTED_CURRENCIES = ("EUR", "USD", "GBP", "AUD", "CAD", "CHF", "JPY", "NZD")
+CURRENCY_SYMBOLS = {"EUR": "€", "USD": "$", "GBP": "£", "AUD": "A$",
+                    "CAD": "C$", "CHF": "Fr ", "JPY": "¥", "NZD": "NZ$"}
+
+
+def symbol() -> str:
+    """The display symbol for the active base currency (e.g. € / $ / £)."""
+    import sys
+    mod = sys.modules[__name__]
+    return mod.CURRENCY_SYMBOLS.get(mod.BASE_CURRENCY, mod.BASE_CURRENCY + " ")
+
+
+def currency_locked(conn) -> bool:
+    """True once the base currency has been committed (chosen at initial setup)."""
+    r = conn.execute("SELECT value FROM settings WHERE key='base_currency'").fetchone()
+    return bool(r and r[0])
+
+
+def autolock_currency(conn) -> None:
+    """Lock an install to its current currency the moment it has any trade history —
+    so an already-running bot (e.g. the live EUR one) can never have it changed."""
+    try:
+        has_history = bool(conn.execute("SELECT 1 FROM orders LIMIT 1").fetchone())
+    except Exception:  # noqa: BLE001 - fresh db without the table yet
+        has_history = False
+    if has_history and not currency_locked(conn):
+        import sys
+        conn.execute("INSERT OR REPLACE INTO settings(key, value) VALUES('base_currency', ?)",
+                     (sys.modules[__name__].BASE_CURRENCY,))
+        conn.commit()
+
+
 # the universe: BASE_PAIRS are always tradeable; the dynamic top-alt set (when
 # enabled) is layered on top. PAIRS is the EFFECTIVE universe everything reads.
-BASE_PAIRS = [p.strip() for p in os.environ.get("PAIRS", "BTC/EUR,ETH/EUR").split(",") if p.strip()]
+_pairs_env = os.environ.get("PAIRS", "").strip()
+BASE_PAIRS = ([p.strip() for p in _pairs_env.split(",") if p.strip()]
+              or [f"BTC/{BASE_CURRENCY}", f"ETH/{BASE_CURRENCY}"])
 # manually pinned coins — always tradeable, exempt from the dynamic sell floor
 MANUAL_PAIRS = [p.strip() for p in os.environ.get("MANUAL_PAIRS", "").split(",") if p.strip()]
 PAIRS = list(BASE_PAIRS)
@@ -145,6 +184,10 @@ def apply_overrides(conn) -> None:
                     setattr(mod, key, val)
             except Exception:  # noqa: BLE001 - a bad stored value must not break boot
                 pass
+    # the locked base currency (set once at initial setup) beats the env default
+    row = conn.execute("SELECT value FROM settings WHERE key='base_currency'").fetchone()
+    if row and row[0]:
+        mod.BASE_CURRENCY = row[0].strip().upper()
     apply_universe(conn)                 # recompute the effective universe
     try:
         from . import market

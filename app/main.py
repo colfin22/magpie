@@ -13,6 +13,7 @@ app = FastAPI(title="Magpie", version=__version__)
 # apply any web-entered settings over the env at boot (before the first cycle)
 try:
     _c = db.connect()
+    config.autolock_currency(_c)   # an install with trade history keeps its currency
     config.apply_overrides(_c)
     _c.close()
 except Exception as _e:  # noqa: BLE001 - never block startup on settings
@@ -262,6 +263,42 @@ def _save_manual_pairs(conn, pairs: list[str]) -> None:
     config.apply_overrides(conn)   # re-merge the effective universe now
 
 
+@app.get("/api/currency")
+def api_currency():
+    conn = db.connect()
+    try:
+        return {"currency": config.BASE_CURRENCY, "symbol": config.symbol(),
+                "locked": config.currency_locked(conn),
+                "supported": list(config.SUPPORTED_CURRENCIES)}
+    finally:
+        conn.close()
+
+
+@app.post("/api/currency/set")
+def api_currency_set(body: dict = Body(...)):
+    """Commit the base currency — a ONE-TIME choice at initial setup. Refused once
+    locked (or once the bot has traded). Validates Kraken lists the base pairs."""
+    conn = db.connect()
+    try:
+        if config.currency_locked(conn):
+            return Response(status_code=400, content=f"base currency is already set to {config.BASE_CURRENCY} and locked")
+        ccy = str(body.get("currency", "")).strip().upper()
+        if ccy not in config.SUPPORTED_CURRENCIES:
+            return Response(status_code=400,
+                            content=f"unsupported — pick one of {', '.join(config.SUPPORTED_CURRENCIES)}")
+        try:
+            for coin in ("BTC", "ETH"):
+                universe.validate_tradeable(f"{coin}/{ccy}")
+        except ValueError as e:
+            return Response(status_code=400, content=f"Kraken can't trade the base pairs in {ccy}: {e}")
+        db.set_setting(conn, "base_currency", ccy)
+        db.set_setting(conn, "cfg_PAIRS", f"BTC/{ccy},ETH/{ccy}")  # default base pairs in the new currency
+        config.apply_overrides(conn)
+        return {"currency": config.BASE_CURRENCY, "symbol": config.symbol(), "locked": True}
+    finally:
+        conn.close()
+
+
 @app.get("/api/pairs")
 def api_pairs():
     """The manually-pinned coins plus the full effective universe."""
@@ -438,6 +475,7 @@ def api_state():
             "WHERE mode=? GROUP BY t ORDER BY t DESC LIMIT 400", (config.mode(),))]
         trips = ledger.round_trips(conn, config.mode())
         return {"mode": config.mode(), "version": __version__, "prices": prices, "overview": ov,
+                "ccy": config.symbol(), "ccy_code": config.BASE_CURRENCY,
                 "next_cycle": _next_cycle_iso(),
                 "halted": db.get_setting(conn, "halted") == "1",
                 "lessons": {"text": db.get_setting(conn, "lessons"),
@@ -487,6 +525,7 @@ def dashboard():
 <script>
 async function load(){
   const s = await (await fetch('/api/state', {cache: 'no-store'})).json();
+  const CCY = s.ccy || '€', CCODE = s.ccy_code || 'EUR';
   document.getElementById('updated').textContent = 'updated ' + new Date().toLocaleTimeString();
   if (s.version) document.getElementById('ver').textContent = 'v' + s.version;
   if (s.next_cycle) {
@@ -498,13 +537,13 @@ async function load(){
   const modeEl = document.getElementById('mode');
   modeEl.textContent = `(${s.mode}${s.halted ? " — HALTED" : ""})`;
   modeEl.className = s.halted ? 'down' : (s.mode === 'live' ? 'up' : 'dim');
-  document.getElementById('equity').textContent = `€${s.overview.total_eur.toFixed(2)}`;
+  document.getElementById('equity').textContent = `${CCY}${s.overview.total_eur.toFixed(2)}`;
   document.getElementById('halted').textContent = s.halted ? " halted — POST /api/resume to re-arm" : "";
   document.getElementById('sleeves').innerHTML = s.overview.sleeves.map(v => {
     const d = v.total_eur - v.allocated;
-    const assets = Object.keys(v.holdings).filter(k => k !== 'EUR');
+    const assets = Object.keys(v.holdings).filter(k => k !== CCODE);
     return `<div class="card"><div class="dim">${v.sleeve}</div>` +
-      `<div class="slv">€${v.total_eur.toFixed(2)}</div>` +
+      `<div class="slv">${CCY}${v.total_eur.toFixed(2)}</div>` +
       `<div class="${d >= 0 ? 'up' : 'down'}">${d >= 0 ? '+' : ''}${d.toFixed(2)}</div>` +
       `<div class="dim">${assets.length ? assets.join(', ') : 'in cash'}</div></div>`;
   }).join('');
@@ -513,14 +552,14 @@ async function load(){
   const pnl = s.overview.total_eur - invested;
   const pnlEl = document.getElementById('pnl');
   pnlEl.textContent = invested > 0
-    ? `${pnl >= 0 ? '+' : '−'}€${Math.abs(pnl).toFixed(2)} (${(pnl / invested * 100).toFixed(1)}%) on €${invested.toFixed(2)} invested`
+    ? `${pnl >= 0 ? '+' : '−'}${CCY}${Math.abs(pnl).toFixed(2)} (${(pnl / invested * 100).toFixed(1)}%) on ${CCY}${invested.toFixed(2)} invested`
     : '';
   pnlEl.className = pnl >= 0 ? 'up' : 'down';
   const vsEl = document.getElementById('vs');
   if (s.benchmark) {
     const edge = s.overview.total_eur - s.benchmark.hodl_eur;
-    vsEl.innerHTML = `vs buy-and-hold <b style="color:#e6e9f0">€${s.benchmark.hodl_eur.toFixed(2)}</b><br>` +
-      `the magpie is <b class="${edge >= 0 ? 'up' : 'down'}">${edge >= 0 ? '+' : '−'}€${Math.abs(edge).toFixed(2)} ` +
+    vsEl.innerHTML = `vs buy-and-hold <b style="color:#e6e9f0">${CCY}${s.benchmark.hodl_eur.toFixed(2)}</b><br>` +
+      `the magpie is <b class="${edge >= 0 ? 'up' : 'down'}">${edge >= 0 ? '+' : '−'}${CCY}${Math.abs(edge).toFixed(2)} ` +
       `${edge >= 0 ? 'ahead of' : 'behind'} doing nothing</b>`;
   } else { vsEl.textContent = ''; }
   // lessons note (appears after the first monthly self-review)
@@ -544,13 +583,13 @@ async function load(){
   // closed trades
   const ts = s.trip_stats;
   document.getElementById('tstats').textContent = ts
-    ? `${ts.closed_trades} closed · ${ts.win_rate_pct}% wins · €${ts.total_pnl_eur}` : '';
+    ? `${ts.closed_trades} closed · ${ts.win_rate_pct}% wins · ${CCY}${ts.total_pnl_eur}` : '';
   document.getElementById('trades').innerHTML = (s.trips && s.trips.length)
     ? '<tr><th>sleeve</th><th>pair</th><th>in→out</th><th>held</th><th>P/L</th></tr>' +
       s.trips.map(t => `<tr><td>${t.sleeve}</td><td>${t.pair}</td>` +
         `<td class="dim">${t.entry_price.toFixed(0)}→${t.exit_price.toFixed(0)}</td>` +
         `<td class="dim">${t.held_days}d</td>` +
-        `<td class="${t.pnl_eur >= 0 ? 'up' : 'down'}">€${t.pnl_eur.toFixed(2)} (${t.pnl_pct}%)</td></tr>`).join('')
+        `<td class="${t.pnl_eur >= 0 ? 'up' : 'down'}">${CCY}${t.pnl_eur.toFixed(2)} (${t.pnl_pct}%)</td></tr>`).join('')
     : '<tr><td class="dim">no closed trades yet</td></tr>';
   document.getElementById('log').innerHTML = '<tr><th>when</th><th>sleeve</th><th>what</th><th>why</th></tr>' +
     s.decisions.map(d => `<tr><td class="dim">${d.at.slice(5,16)}</td><td>${d.sleeve||''}</td>` +
@@ -644,6 +683,18 @@ deliberate environment change (<code>TRADING_ENABLED</code>), never a setting he
 </div>
 
 <div class="card">
+  <p class="eyebrow">Base currency</p>
+  <div id="ccy-locked" hidden><p style="margin:.2rem 0">Trading and valuing everything in <b id="ccy-cur"></b>.</p><p class="note">Chosen at initial setup and <b>locked</b> — it can't be changed once the bot has traded (safe: your holdings and exchange balance are in this currency).</p></div>
+  <div id="ccy-choose" hidden>
+    <p class="note">The currency Magpie trades against and values everything in. <b>This is permanent</b> — it locks the moment you set it (and automatically once the bot has traded). Choose it before funding the account.</p>
+    <label>Currency</label>
+    <select id="ccy-select"></select>
+    <div class="row"><button class="test" onclick="currencySet()">Set permanently</button>
+      <span class="result" id="r-ccy"></span></div>
+  </div>
+</div>
+
+<div class="card">
   <p class="eyebrow">Strategy</p>
   <label>Base pairs — always tradeable (comma-separated)</label><input id="PAIRS" placeholder="BTC/EUR, ETH/EUR">
   <label>Profit skim to vault (0–1)</label><input id="SKIM_FRACTION">
@@ -724,6 +775,28 @@ async function load(){
   });
   tfaLoad();
   pairsLoad();
+  currencyLoad();
+}
+async function currencyLoad(){
+  const s = await (await fetch('/api/currency',{cache:'no-store'})).json();
+  document.getElementById('ccy-locked').hidden = !s.locked;
+  document.getElementById('ccy-choose').hidden = s.locked;
+  document.getElementById('ccy-cur').textContent = s.currency + ' (' + s.symbol.trim() + ')';
+  if (!s.locked){
+    const sel = document.getElementById('ccy-select'); sel.innerHTML='';
+    s.supported.forEach(c => { const o=document.createElement('option'); o.value=c; o.textContent=c;
+      if(c===s.currency) o.selected=true; sel.appendChild(o); });
+  }
+}
+async function currencySet(){
+  const el = document.getElementById('r-ccy');
+  const ccy = document.getElementById('ccy-select').value;
+  if (!confirm('Set the base currency to '+ccy+' permanently? This is locked and cannot be changed later.')) return;
+  el.className='result dim'; el.textContent='checking Kraken…';
+  const r = await fetch('/api/currency/set',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({currency:ccy})});
+  if (r.ok){ el.className='result up'; el.textContent='✓ locked to '+ccy; load(); }
+  else { el.className='result down'; el.textContent='✗ '+(await r.text()); }
 }
 async function pairsLoad(){
   const s = await (await fetch('/api/pairs',{cache:'no-store'})).json();

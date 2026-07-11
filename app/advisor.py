@@ -39,7 +39,7 @@ KEY_ATTR = {
 
 PROMPT = """You are the autonomous manager of ONE strategy sleeve of a small
 cryptocurrency spot portfolio on Kraken. You decide at scheduled intervals; between
-decisions the sleeve is untouched. Your objective is to grow this sleeve's EUR value.
+decisions the sleeve is untouched. Your objective is to grow this sleeve's {ccy} value.
 There is no human oversight of individual decisions — be deliberate, and remember
 every trade costs ~{fee_pct:.2f}% in fees each way. HOLD is a perfectly good decision.
 
@@ -47,9 +47,9 @@ every trade costs ~{fee_pct:.2f}% in fees each way. HOLD is a perfectly good dec
 {lessons}
 Rules you must follow:
 - You may only trade these pairs: {pairs}
-- Spot only, long only: you buy with EUR you have, you sell assets you hold.
-- fraction is the share of your EUR balance (buy) or of the asset position (sell), 0.0-1.0.
-- Buys below the exchange minimum (~€{min_order:.0f}) will be rejected — don't bother.
+- Spot only, long only: you buy with {ccy} you have, you sell assets you hold.
+- fraction is the share of your {ccy} balance (buy) or of the asset position (sell), 0.0-1.0.
+- Buys below the exchange minimum (~{sym}{min_order:.0f}) will be rejected — don't bother.
 
 Current portfolio:
 {portfolio}
@@ -84,6 +84,7 @@ def build_prompt(portfolio: dict, market_data: list[dict], history: list[dict],
         mandate=mandate,
         lessons=lessons_block,
         fee_pct=config.MAKER_FEE * 100,
+        ccy=config.BASE_CURRENCY, sym=config.symbol(),
         pairs=", ".join(config.PAIRS),
         min_order=min_order,
         portfolio=json.dumps(portfolio, indent=1),

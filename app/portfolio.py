@@ -33,8 +33,8 @@ def _set(conn, mode: str, sleeve: str, asset: str, amount: float) -> None:
 
 def valued(conn, mode: str, sleeve: str, prices: dict[str, float]) -> dict:
     h = holdings(conn, mode, sleeve)
-    total = h.get("EUR", 0.0)
-    detail = {"EUR": round(h.get("EUR", 0.0), 2)}
+    total = h.get(config.BASE_CURRENCY, 0.0)
+    detail = {config.BASE_CURRENCY: round(h.get(config.BASE_CURRENCY, 0.0), 2)}
     for pair, price in prices.items():
         asset = pair.split("/")[0]
         if h.get(asset):
@@ -121,9 +121,9 @@ def execute(conn, mode: str, sleeve: str, decision_id: int, action: str, pair: s
     h = holdings(conn, mode, sleeve)
     if action == "buy":
         price = t["bid"]
-        spend = h.get("EUR", 0.0) * fraction
+        spend = h.get(config.BASE_CURRENCY, 0.0) * fraction
         if spend < min_order_eur(pair):
-            raise ValueError(f"buy of €{spend:.2f} is under the €{min_order_eur(pair):.0f} exchange minimum")
+            raise ValueError(f"buy of {config.symbol()}{spend:.2f} is under the {config.symbol()}{min_order_eur(pair):.0f} exchange minimum")
         amount = (spend * (1 - config.MAKER_FEE)) / price
         if mode == "live":
             exchange_id, fee_rate = _live_fill(pair, "buy", amount, price)
@@ -131,7 +131,7 @@ def execute(conn, mode: str, sleeve: str, decision_id: int, action: str, pair: s
             exchange_id, fee_rate = None, config.MAKER_FEE
         fee = spend * fee_rate
         amount = (spend - fee) / price
-        _set(conn, mode, sleeve, "EUR", h.get("EUR", 0.0) - spend)
+        _set(conn, mode, sleeve, config.BASE_CURRENCY, h.get(config.BASE_CURRENCY, 0.0) - spend)
         _set(conn, mode, sleeve, asset, h.get(asset, 0.0) + amount)
     elif action == "sell":
         price = t["ask"]
@@ -145,7 +145,7 @@ def execute(conn, mode: str, sleeve: str, decision_id: int, action: str, pair: s
             exchange_id, fee_rate = None, config.MAKER_FEE
         fee = proceeds * fee_rate
         _set(conn, mode, sleeve, asset, h.get(asset, 0.0) - amount)
-        _set(conn, mode, sleeve, "EUR", h.get("EUR", 0.0) + proceeds - fee)
+        _set(conn, mode, sleeve, config.BASE_CURRENCY, h.get(config.BASE_CURRENCY, 0.0) + proceeds - fee)
         spend = proceeds
     else:
         raise ValueError(f"unknown action {action}")
@@ -170,13 +170,13 @@ def skim_profits(conn, mode: str, prices: dict[str, float]) -> list[dict]:
         profit = v["total_eur"] - v["hwm"]
         if profit <= 0.01:
             continue
-        eur = holdings(conn, mode, s).get("EUR", 0.0)
+        eur = holdings(conn, mode, s).get(config.BASE_CURRENCY, 0.0)
         amount = round(min(eur, profit * config.SKIM_FRACTION), 2)
         if amount < 0.5:  # not worth shuffling pennies
             continue
-        _set(conn, mode, s, "EUR", eur - amount)
-        vault_eur = holdings(conn, mode, sleeves.VAULT).get("EUR", 0.0)
-        _set(conn, mode, sleeves.VAULT, "EUR", vault_eur + amount)
+        _set(conn, mode, s, config.BASE_CURRENCY, eur - amount)
+        vault_eur = holdings(conn, mode, sleeves.VAULT).get(config.BASE_CURRENCY, 0.0)
+        _set(conn, mode, sleeves.VAULT, config.BASE_CURRENCY, vault_eur + amount)
         conn.execute("UPDATE sleeve_meta SET hwm=? WHERE mode=? AND sleeve=?",
                      (v["total_eur"] - amount, mode, s))
         conn.execute("INSERT INTO skims(at, mode, sleeve, amount) VALUES(?,?,?,?)",
@@ -199,8 +199,8 @@ def apply_topup(conn, mode: str, amount: float) -> dict:
     for skimmable profit. The vault stays profits-only."""
     per = round(amount / len(sleeves.ACTIVE), 2)
     for s in sleeves.ACTIVE:
-        eur = holdings(conn, mode, s).get("EUR", 0.0)
-        _set(conn, mode, s, "EUR", eur + per)
+        eur = holdings(conn, mode, s).get(config.BASE_CURRENCY, 0.0)
+        _set(conn, mode, s, config.BASE_CURRENCY, eur + per)
         conn.execute("UPDATE sleeve_meta SET allocated=allocated+?, hwm=hwm+? "
                      "WHERE mode=? AND sleeve=?", (per, per, mode, s))
     conn.commit()
@@ -218,7 +218,7 @@ def detect_topup(conn, mode: str) -> dict | None:
     is a fresh deposit — split it. Paper mode has POST /api/topup instead."""
     if mode != "live":
         return None
-    actual = float(market.exchange().fetch_balance().get("total", {}).get("EUR") or 0.0)
+    actual = float(market.exchange().fetch_balance().get("total", {}).get(config.BASE_CURRENCY) or 0.0)
     surplus = actual - booked_eur(conn, mode)
     if surplus > TOPUP_EPSILON_EUR:
         return apply_topup(conn, mode, round(surplus, 2))
