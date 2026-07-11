@@ -227,73 +227,82 @@ From then on it trades the real balance in your (dedicated, empty) Kraken accoun
 - **`http://localhost:8000` won't open?** Wait a minute after step 4 and refresh — the first build takes a moment to finish.
 - **Do I need Python, Linux or WSL?** No. Docker Desktop sets up everything it needs behind the scenes.
 
-## Updating on Windows
+## Updating Magpie (Windows)
 
-Good news: your keys (`.env`) and everything Magpie has learned and recorded (the
-**`data`** folder — trading history, settings, your 2FA) are **not** part of the
-download. So updating is just swapping in the newer code — your account and
-history carry straight over.
+Don't worry — your settings and history are kept safe for you. Your keys live in a
+file called **`.env`**, and everything Magpie has recorded (your trades, settings
+and 2FA) lives in a folder called **`data`**. Neither of those is inside the
+download, so updating can't overwrite them — you're only swapping in newer program
+files.
 
-1. Have a look at the **[latest release](https://github.com/colfin22/magpie/releases)** to see what's new.
-2. Download the new **ZIP** the same way as before — the green **`<> Code`** button → **Download ZIP** — then right-click it → **Extract All…**.
-3. Open the **freshly extracted** `magpie-master` folder, press **Ctrl+A** (select everything), then **Ctrl+C** (copy).
-4. Go to your **existing** Magpie folder, press **Ctrl+V** (paste). When Windows asks, choose **"Replace the files in the destination."**
-   *This overwrites the old code with the new version. It does **not** touch your `.env` or your `data` folder — the download doesn't contain either of them.*
-5. Open **PowerShell** in the folder (type `powershell` in the address bar) and run:
+1. **See what's new.** Visit the **[latest release](https://github.com/colfin22/magpie/releases)** page to check what changed.
+2. **Download the new version.** Go to **[github.com/colfin22/magpie](https://github.com/colfin22/magpie)**, click the green **`<> Code`** button, then **Download ZIP**. Find the ZIP in your **Downloads**, right-click it → **Extract All… → Extract**.
+3. **Select and copy the new files.** Open the newly extracted `magpie-master` folder. Press **Ctrl+A** to highlight everything inside, then **Ctrl+C** to copy it.
+4. **Paste them into your existing Magpie folder.** Open the Magpie folder you already have and press **Ctrl+V**. Windows will say some files already exist — choose **"Replace the files in the destination."** *(This only replaces the program files. Your `.env` and `data` folder aren't in the download, so they're left exactly as they were.)*
+5. **Rebuild it.** In your Magpie folder, click the **address bar** at the very top (where the folder name shows), type **`powershell`**, and press **Enter** — a blue window opens, already pointing at the folder. Type this line and press **Enter**:
    ```
    docker compose up -d --build
    ```
-6. When it finishes, open **[http://localhost:8000](http://localhost:8000)** and press **Ctrl+Shift+R** — that forces your browser to load the new dashboard instead of a saved old one.
+   Wait until the blue window shows a fresh prompt again.
+6. **Open the dashboard.** Go to **[http://localhost:8000](http://localhost:8000)** and press **Ctrl+Shift+R** — that makes your browser load the new version instead of a saved copy.
 
-That's it. Your holdings, diary, settings and 2FA are all intact, and your
-scheduled tasks from setup keep working unchanged.
+Done. Your holdings, diary, settings and 2FA all carry over, and the scheduled
+tasks you set up earlier keep working — nothing to redo.
 
-> **⚠️ Never delete the `data` folder.** It *is* your database — trading history,
-> settings and your 2FA secret. Deleting it resets Magpie to a blank install.
+> **⚠️ Never delete the `data` folder.** It *is* your database — your history,
+> settings and your 2FA. Deleting it wipes Magpie back to a blank install.
 
-**Prefer the command line?** If you installed with `git clone`, updating is just
-`git pull` in the folder followed by `docker compose up -d --build`.
+*(If you set Magpie up with `git clone` rather than the ZIP, updating is just
+`git pull` in the folder, then `docker compose up -d --build`.)*
 
-## Uninstalling or starting fresh (Windows)
+## Uninstalling or starting over (Windows)
 
-**Just pause it for a while** (keeps everything, easy to resume) — in **PowerShell**
-in the Magpie folder:
+Everything below is typed into a **blue PowerShell window opened in your Magpie
+folder**. To open one: open your Magpie folder, click the **address bar** at the
+top, type **`powershell`**, and press **Enter**.
+
+### Just pause it for a while (keeps everything)
+Type this and press **Enter**:
 ```
-docker compose stop      # later, bring it back with:  docker compose start
+docker compose stop
 ```
+When you want it back, type `docker compose start` and press **Enter**.
 
-**Remove Magpie completely:**
-1. In PowerShell in the folder, stop and delete the app and its image:
+### Remove Magpie completely
+1. In the blue PowerShell window, type this and press **Enter**. It stops and
+   deletes the app and frees up the disk space:
    ```
    docker compose down --rmi all
    ```
-2. Delete the whole **Magpie folder** (the code, your `.env`, and the `data` database).
-3. Remove the scheduled pokes — in **PowerShell as Administrator**:
+2. **Delete the Magpie folder.** Close the PowerShell window, then right-click your
+   Magpie folder and choose **Delete**. *(This removes the program, your `.env`
+   keys and the `data` database.)*
+3. **Remove the scheduled reminders.** Click **Start**, type **PowerShell**,
+   right-click it and choose **Run as administrator**, then **Yes**. Paste these
+   four lines and press **Enter**:
    ```
    schtasks /delete /tn "Magpie cycle" /f
    schtasks /delete /tn "Magpie digest" /f
    schtasks /delete /tn "Magpie reconcile" /f
    schtasks /delete /tn "Magpie review" /f
    ```
-4. If you don't use Docker for anything else, uninstall **Docker Desktop** too: Windows **Settings → Apps → Installed apps → Docker Desktop → Uninstall**.
+4. **(Optional) Remove Docker Desktop** if you don't use it for anything else:
+   Windows **Settings → Apps → Installed apps → Docker Desktop → Uninstall**.
 
-> **💰 Your money is safe and separate.** Uninstalling Magpie does **nothing** to
-> your Kraken account — your balance stays on Kraken exactly where it is. To get
-> your funds back, sell or withdraw on **Kraken** directly. And once Magpie is
-> gone, **delete its API key** in your Kraken account settings so nothing can use
-> it again.
+> **💰 Your money is safe and separate.** Removing Magpie does **nothing** to your
+> Kraken account — your balance stays on Kraken exactly where it is. To get your
+> money, sell or withdraw on **Kraken** directly. And once Magpie is gone, go to
+> your Kraken account settings and **delete its API key** so nothing can use it
+> again.
 
-**Start fresh but keep using Magpie** (wipe the history, keep the app) — in the
-Magpie folder:
-```
-docker compose down      # stop it
-```
-Delete just the **`data`** folder, then start it again:
-```
-docker compose up -d --build
-```
-It comes back as a brand-new install — paper mode, an empty diary, and you choose
-your base currency again.
+### Start over fresh, but keep using Magpie
+This wipes the history and gives you a clean slate while keeping the app installed:
+1. In the blue PowerShell window, type `docker compose down` and press **Enter** (this stops it).
+2. Open your Magpie folder and delete just the **`data`** folder (right-click → **Delete**).
+3. Back in the PowerShell window, type `docker compose up -d --build` and press **Enter**.
+
+It comes back brand new — paper mode, an empty diary, and you choose your base
+currency again.
 
 ## API
 
