@@ -50,7 +50,7 @@ async def auth_gate(request, call_next):
 def login_page(bad: int = 0):
     err = ''
     if bad == 2:
-        err = '<p style="color:#ff6b6b">Enter your 6-digit 2FA code.</p>'
+        err = '<p style="color:#ff6b6b">Enter your 2FA code (or a backup code).</p>'
     elif bad:
         err = '<p style="color:#ff6b6b">Wrong details.</p>'
     return f"""<!doctype html><html><head><meta charset="utf-8">
@@ -74,7 +74,8 @@ def login_submit(username: str = Form(""), password: str = Form(""), otp: str = 
     try:
         if not auth.check_login(conn, username, password):
             return RedirectResponse("/login?bad=1", status_code=302)
-        if auth.totp_is_enabled(conn) and not auth.check_totp(conn, otp):
+        if auth.totp_is_enabled(conn) and not (
+                auth.check_totp(conn, otp) or auth.consume_backup_code(conn, otp)):
             return RedirectResponse("/login?bad=2", status_code=302)  # password ok, code missing/wrong
         resp = RedirectResponse("/", status_code=302)
         resp.set_cookie(auth.COOKIE, auth.token(conn), httponly=True,
@@ -95,7 +96,8 @@ def logout():
 def api_2fa_status():
     conn = db.connect()
     try:
-        return {"enabled": auth.totp_is_enabled(conn), "password_set": auth.enabled()}
+        return {"enabled": auth.totp_is_enabled(conn), "password_set": auth.enabled(),
+                "backup_remaining": auth.backup_codes_remaining(conn)}
     finally:
         conn.close()
 
@@ -120,8 +122,24 @@ def api_2fa_enable(body: dict = Body(...)):
     conn = db.connect()
     try:
         if auth.enable_totp(conn, str(body.get("code", ""))):
-            return {"enabled": True}
+            codes = auth.generate_backup_codes(conn)   # shown once
+            return {"enabled": True, "backup_codes": codes}
         return Response(status_code=400, content="that code didn't verify — check the time on your phone and try the current one")
+    finally:
+        conn.close()
+
+
+@app.post("/api/2fa/backup")
+def api_2fa_backup(body: dict = Body(...)):
+    """Regenerate the backup codes (invalidates the old set). Needs a current
+    authenticator code so a hijacked session can't silently mint new ones."""
+    conn = db.connect()
+    try:
+        if not auth.totp_is_enabled(conn):
+            return Response(status_code=400, content="enable 2FA first")
+        if not auth.check_totp(conn, str(body.get("code", ""))):
+            return Response(status_code=400, content="enter a current authenticator code to regenerate")
+        return {"backup_codes": auth.generate_backup_codes(conn)}
     finally:
         conn.close()
 
@@ -585,8 +603,18 @@ deliberate environment change (<code>TRADING_ENABLED</code>), never a setting he
     <div class="row"><button class="test" onclick="tfaEnable()">Confirm &amp; enable</button>
       <span class="result" id="tfa-r"></span></div>
   </div>
+  <div id="tfa-codes" hidden style="margin-top:.8rem;border:1px solid #4cd97b;border-radius:8px;padding:.8rem">
+    <p class="note" style="margin:0 0 .4rem"><b>⚠ Save these backup codes now — shown only once.</b> Each works once in place of your authenticator if you lose your phone.</p>
+    <pre id="tfa-codes-list" style="margin:.4rem 0;font-size:1rem;line-height:1.7;user-select:all"></pre>
+    <button class="test" onclick="document.getElementById('tfa-codes').hidden=true">I've saved them</button>
+  </div>
   <div id="tfa-on" hidden>
-    <p class="note">2FA is on. To turn it off, enter a current code.</p>
+    <p class="note">2FA is on. Backup codes left: <b id="tfa-remaining">–</b>.</p>
+    <label>Regenerate backup codes (needs a current code)</label>
+    <input id="tfa-rcode" inputmode="numeric" autocomplete="one-time-code" placeholder="6-digit code">
+    <div class="row"><button class="test" onclick="tfaRegen()">Regenerate backup codes</button>
+      <span class="result" id="tfa-rr"></span></div>
+    <label style="margin-top:.8rem">Disable 2FA (needs a current code)</label>
     <input id="tfa-dcode" inputmode="numeric" autocomplete="one-time-code" placeholder="6-digit code">
     <div class="row"><button class="test" onclick="tfaDisable()">Disable 2FA</button>
       <span class="result" id="tfa-dr"></span></div>
@@ -622,6 +650,18 @@ async function tfaLoad(){
   show('tfa-off', s.password_set && !s.enabled);
   show('tfa-on', s.password_set && s.enabled);
   show('tfa-setup', false);
+  document.getElementById('tfa-remaining').textContent = s.backup_remaining ?? '–';
+}
+function showBackupCodes(codes){
+  document.getElementById('tfa-codes-list').textContent = (codes||[]).join('\n');
+  document.getElementById('tfa-codes').hidden = false;
+}
+async function tfaRegen(){
+  const el = document.getElementById('tfa-rr'); el.className='result dim'; el.textContent='…';
+  const r = await fetch('/api/2fa/backup',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({code:document.getElementById('tfa-rcode').value})});
+  if (r.ok){ el.className='result up'; el.textContent='✓ new set below'; showBackupCodes((await r.json()).backup_codes); tfaLoad(); }
+  else { el.className='result down'; el.textContent='✗ '+(await r.text()); }
 }
 async function tfaSetup(){
   const r = await (await fetch('/api/2fa/setup',{method:'POST'})).json();
@@ -634,7 +674,7 @@ async function tfaEnable(){
   const el = document.getElementById('tfa-r'); el.className='result dim'; el.textContent='checking…';
   const r = await fetch('/api/2fa/enable',{method:'POST',headers:{'Content-Type':'application/json'},
     body:JSON.stringify({code:document.getElementById('tfa-code').value})});
-  if (r.ok){ el.className='result up'; el.textContent='✓ 2FA on'; tfaLoad(); }
+  if (r.ok){ el.className='result up'; el.textContent='✓ 2FA on'; showBackupCodes((await r.json()).backup_codes); tfaLoad(); }
   else { el.className='result down'; el.textContent='✗ '+(await r.text()); }
 }
 async function tfaDisable(){

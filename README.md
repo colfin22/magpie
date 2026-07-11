@@ -197,9 +197,14 @@ your own reverse-proxy auth.
 **Two-factor (TOTP).** Once a password is set, turn on 2FA from the Security card:
 scan the QR into Google Authenticator / Authy / 1Password, confirm a code, and
 every login then needs the 6-digit code as well as the password. It's standard
-TOTP, verified at login before the session cookie is issued. Lost your
-authenticator? Clear it from the container:
-`docker exec magpie sqlite3 /data/magpie.db "DELETE FROM settings WHERE key IN ('totp_enabled','totp_secret')"`.
+TOTP, verified at login before the session cookie is issued.
+
+Enabling 2FA hands you **10 single-use backup codes** (shown once, stored hashed).
+Any one works in the login's code field in place of your authenticator and is then
+spent — the way back in if you lose your phone. Regenerate the set anytime from the
+Security card (needs a current code). If you lose the authenticator *and* the codes,
+the last resort clears it from the container:
+`docker exec magpie sqlite3 /data/magpie.db "DELETE FROM settings WHERE key IN ('totp_enabled','totp_secret','totp_backup_codes')"`.
 
 ## Licence
 

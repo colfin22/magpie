@@ -93,3 +93,47 @@ def test_2fa_endpoints_end_to_end(client, monkeypatch):
     assert client.get("/api/2fa").json()["enabled"] is True
     assert client.post("/api/2fa/disable", json={"code": "000000"}).status_code == 400
     assert client.post("/api/2fa/disable", json={"code": pyotp.TOTP(s["secret"]).now()}).json()["enabled"] is False
+
+
+def test_backup_codes_generate_and_consume(client, monkeypatch):
+    from app import auth, db
+    monkeypatch.setattr(config, "DASHBOARD_PASSWORD", "hunter2")
+    conn = db.connect()
+    codes = auth.generate_backup_codes(conn)
+    assert len(codes) == 10 and auth.backup_codes_remaining(conn) == 10
+    assert auth.consume_backup_code(conn, codes[0]) is True          # burns it
+    assert auth.backup_codes_remaining(conn) == 9
+    assert auth.consume_backup_code(conn, codes[0]) is False         # single-use
+    assert auth.consume_backup_code(conn, codes[3].replace("-", "").upper()) is True  # format-insensitive
+    assert auth.consume_backup_code(conn, "not-a-code") is False
+    conn.close()
+
+
+def test_login_accepts_backup_code(client, monkeypatch):
+    import pyotp
+    from app import auth, db
+    monkeypatch.setattr(config, "DASHBOARD_PASSWORD", "hunter2")
+    conn = db.connect(); secret = auth.new_totp_secret(conn)
+    auth.enable_totp(conn, pyotp.TOTP(secret).now())
+    codes = auth.generate_backup_codes(conn); conn.close()
+    r = client.post("/login", data={"password": "hunter2", "otp": codes[0]})
+    assert r.status_code == 302 and r.headers["location"] == "/"      # backup code logs in
+    # and it's now spent
+    conn = db.connect(); assert auth.consume_backup_code(conn, codes[0]) is False; conn.close()
+
+
+def test_2fa_backup_endpoints(client, monkeypatch):
+    import pyotp
+    monkeypatch.setattr(config, "DASHBOARD_PASSWORD", "hunter2")
+    client.post("/login", data={"password": "hunter2"})
+    s = client.post("/api/2fa/setup").json()
+    enabled = client.post("/api/2fa/enable", json={"code": pyotp.TOTP(s["secret"]).now()}).json()
+    assert len(enabled["backup_codes"]) == 10                         # shown once on enable
+    assert client.get("/api/2fa").json()["backup_remaining"] == 10
+    # regenerate needs a real code
+    assert client.post("/api/2fa/backup", json={"code": "000000"}).status_code == 400
+    fresh = client.post("/api/2fa/backup", json={"code": pyotp.TOTP(s["secret"]).now()}).json()
+    assert len(fresh["backup_codes"]) == 10 and fresh["backup_codes"] != enabled["backup_codes"]
+    # disable wipes them
+    client.post("/api/2fa/disable", json={"code": pyotp.TOTP(s["secret"]).now()})
+    assert client.get("/api/2fa").json()["backup_remaining"] == 0

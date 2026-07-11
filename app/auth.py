@@ -6,9 +6,12 @@ cookie holds a token derived from the password + a per-install secret, so
 changing the password invalidates old sessions."""
 import hashlib
 import hmac
+import json
 import secrets
 
 from . import config, db
+
+BACKUP_COUNT = 10
 
 COOKIE = "magpie_auth"
 # Public: the login page, health (monitoring), and the timer-triggered action
@@ -106,6 +109,53 @@ def enable_totp(conn, code: str) -> bool:
 def disable_totp(conn) -> None:
     db.set_setting(conn, "totp_enabled", "0")
     db.set_setting(conn, "totp_secret", "")
+    db.set_setting(conn, "totp_backup_codes", "[]")
+
+
+# ---- single-use backup recovery codes (accepted in place of a TOTP code) ----
+# Stored hashed (HMAC with the server secret); the plaintext is shown once at
+# generation and never again. Using one consumes it.
+
+def _hash_code(conn, code: str) -> str:
+    norm = str(code or "").strip().lower().replace("-", "").replace(" ", "")
+    return hmac.new(_server_secret(conn).encode(), norm.encode(), hashlib.sha256).hexdigest()
+
+
+def generate_backup_codes(conn) -> list[str]:
+    """Mint a fresh set (invalidating any old set) and return the plaintext once."""
+    codes, hashes = [], []
+    for _ in range(BACKUP_COUNT):
+        raw = secrets.token_hex(4)              # 8 hex chars of entropy
+        pretty = raw[:4] + "-" + raw[4:]
+        codes.append(pretty)
+        hashes.append(_hash_code(conn, pretty))
+    db.set_setting(conn, "totp_backup_codes", json.dumps(hashes))
+    return codes
+
+
+def backup_codes_remaining(conn) -> int:
+    try:
+        return len(json.loads(db.get_setting(conn, "totp_backup_codes", "[]") or "[]"))
+    except (ValueError, TypeError):
+        return 0
+
+
+def consume_backup_code(conn, code: str) -> bool:
+    """Verify + burn a backup code. A 6-digit TOTP never matches (different length)."""
+    norm = str(code or "").strip().lower().replace("-", "").replace(" ", "")
+    if not norm:
+        return False
+    target = _hash_code(conn, norm)
+    try:
+        hashes = json.loads(db.get_setting(conn, "totp_backup_codes", "[]") or "[]")
+    except (ValueError, TypeError):
+        hashes = []
+    match = next((h for h in hashes if hmac.compare_digest(h, target)), None)
+    if match is None:
+        return False
+    hashes.remove(match)
+    db.set_setting(conn, "totp_backup_codes", json.dumps(hashes))
+    return True
 
 
 def totp_qr_svg(uri: str) -> str:
