@@ -218,9 +218,12 @@ def api_cycle():
 
 
 @app.post("/api/cycle/retry")
-def api_cycle_retry():
-    """Retry now every sleeve whose latest decision errored (off-schedule)."""
-    return engine.retry_now()
+def api_cycle_retry(force: bool = False):
+    """Retry now every sleeve whose latest decision errored (off-schedule).
+
+    Called every few minutes by the magpie-retry systemd timer; `force=true`
+    bypasses the consecutive-attempt cap for a manual retry."""
+    return engine.retry_now(force=force)
 
 
 @app.post("/api/digest")

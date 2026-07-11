@@ -240,44 +240,35 @@ def test_settings_overrides_apply_and_mask(monkeypatch):
         conn.close(); os.unlink(p)
 
 
-# --- short retry of failed sleeves (#30 follow-up) -----------------------
+# --- short retry of failed sleeves, systemd-timer driven (#30 follow-up) ----
 
-def test_error_schedules_a_short_retry(monkeypatch):
+def test_note_retry_state_marks_pending_on_error():
     conn, p = make_db()
-    calls = []
-    monkeypatch.setattr(engine, "_schedule", lambda *a: calls.append(a))
     try:
-        engine._maybe_schedule_retry(conn, [{"sleeve": "swing", "status": "error"}], attempt=1)
-        assert len(calls) == 1
-        assert calls[0][1] is engine._run_retry      # (delay, fn, *args)
-        assert calls[0][2] == ["swing"] and calls[0][3] == 1
-        assert db.get_setting(conn, "retry_cycle_at")  # a soon time is recorded
+        engine._note_retry_state(conn, [{"sleeve": "swing", "status": "error"}], fresh_cycle=True)
+        assert db.get_setting(conn, "retry_attempts") == "0"   # fresh budget
+        assert db.get_setting(conn, "retry_cycle_at")          # an indicative time is recorded
     finally:
         conn.close(); os.unlink(p)
 
 
-def test_no_retry_for_held_or_no_key(monkeypatch):
+def test_note_retry_state_clears_for_held_or_no_key():
     conn, p = make_db()
-    calls = []
-    monkeypatch.setattr(engine, "_schedule", lambda *a: calls.append(a))
     try:
-        engine._maybe_schedule_retry(conn, [
+        engine._note_retry_state(conn, [
             {"sleeve": "swing", "status": "held"},
-            {"sleeve": "fortnight", "status": "no_key"}], attempt=1)
-        assert calls == []
-        assert not db.get_setting(conn, "retry_cycle_at")  # cleared
+            {"sleeve": "fortnight", "status": "no_key"}], fresh_cycle=True)
+        assert not db.get_setting(conn, "retry_cycle_at")      # nothing to retry
     finally:
         conn.close(); os.unlink(p)
 
 
-def test_retry_stops_after_max(monkeypatch):
+def test_note_retry_state_no_pending_past_budget():
     conn, p = make_db()
-    calls = []
-    monkeypatch.setattr(engine, "_schedule", lambda *a: calls.append(a))
     try:
-        engine._maybe_schedule_retry(conn, [{"sleeve": "swing", "status": "error"}],
-                                     attempt=engine.CYCLE_RETRY_MAX + 1)
-        assert calls == []
+        db.set_setting(conn, "retry_attempts", str(engine.CYCLE_RETRY_MAX))
+        engine._note_retry_state(conn, [{"sleeve": "swing", "status": "error"}], fresh_cycle=False)
+        assert not db.get_setting(conn, "retry_cycle_at")      # budget spent
     finally:
         conn.close(); os.unlink(p)
 
@@ -307,17 +298,44 @@ def test_latest_failed_sleeves():
         conn.close(); os.unlink(p)
 
 
-def test_retry_now_wires_failed_to_rerun(monkeypatch):
-    conn, p = make_db()
-    monkeypatch.setattr(db, "connect", lambda *a, **k: conn)
+def _retry_now_setup(monkeypatch, path, failed):
+    orig = db.connect
+    monkeypatch.setattr(db, "connect", lambda *a, **k: orig(path))  # fresh conn per call
     monkeypatch.setattr(config, "mode", lambda: "paper")
-    monkeypatch.setattr(engine, "_latest_failed_sleeves", lambda c, m: ["swing"])
+    monkeypatch.setattr(engine, "_latest_failed_sleeves", lambda c, m: list(failed))
     monkeypatch.setattr(engine, "retry_sleeves",
-                        lambda c, m, names: [{"sleeve": n, "status": "held"} for n in names])
+                        lambda c, m, names: [{"sleeve": n, "status": "error"} for n in names])
     monkeypatch.setattr(engine, "_track_cycle_outcome", lambda *a, **k: None)
-    monkeypatch.setattr(engine, "_maybe_schedule_retry", lambda *a, **k: None)
+
+
+def test_retry_now_reruns_failed_and_counts(monkeypatch):
+    conn, p = make_db()
+    _retry_now_setup(monkeypatch, p, ["swing"])
     try:
         out = engine.retry_now()
-        assert out["status"] == "ok" and out["retried"] == ["swing"]
+        assert out["status"] == "ok" and out["retried"] == ["swing"] and out["attempt"] == 1
+        assert db.get_setting(conn, "retry_attempts") == "1"
     finally:
-        os.unlink(p)
+        conn.close(); os.unlink(p)
+
+
+def test_retry_now_nothing_to_retry_resets(monkeypatch):
+    conn, p = make_db()
+    _retry_now_setup(monkeypatch, p, [])
+    db.set_setting(conn, "retry_attempts", "2")
+    try:
+        assert engine.retry_now()["status"] == "nothing-to-retry"
+        assert db.get_setting(conn, "retry_attempts") == "0"    # budget reset
+    finally:
+        conn.close(); os.unlink(p)
+
+
+def test_retry_now_stops_at_budget_but_force_overrides(monkeypatch):
+    conn, p = make_db()
+    _retry_now_setup(monkeypatch, p, ["swing"])
+    db.set_setting(conn, "retry_attempts", str(engine.CYCLE_RETRY_MAX))
+    try:
+        assert engine.retry_now()["status"] == "exhausted"      # cap reached
+        assert engine.retry_now(force=True)["status"] == "ok"   # manual override runs anyway
+    finally:
+        conn.close(); os.unlink(p)

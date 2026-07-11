@@ -2,7 +2,6 @@
 import json
 import logging
 import os
-import threading
 from datetime import datetime, timedelta, timezone
 
 from . import advisor, config, db, ha, ledger, market, portfolio, sleeves
@@ -134,7 +133,7 @@ def run_cycle(now=None) -> dict:
         ledger.bench_init_if_needed(conn, mode, ov["total_eur"], prices)
         _track_cycle_outcome(conn, results, crashed=False)
         db.set_setting(conn, "last_cycle_at", _now())
-        _maybe_schedule_retry(conn, results, attempt=1)
+        _note_retry_state(conn, results, fresh_cycle=True)
         return {"status": "ok", "mode": mode, "topup": topup, "results": results,
                 "skims": skims, "total_eur": ov["total_eur"]}
     except Exception:
@@ -165,42 +164,20 @@ def _failed_sleeves(results: list[dict]) -> list[str]:
             if r.get("status") == "error" and r.get("sleeve")]
 
 
-def _schedule(delay_s: float, fn, *args) -> None:
-    t = threading.Timer(delay_s, fn, args=args)
-    t.daemon = True
-    t.start()
-
-
-def _maybe_schedule_retry(conn, results: list[dict], attempt: int) -> None:
-    """After a failed sleeve, queue a retry of just that sleeve in a few minutes
-    (up to CYCLE_RETRY_MAX) instead of waiting for the next scheduled cycle."""
+def _note_retry_state(conn, results: list[dict], *, fresh_cycle: bool) -> None:
+    """Record whether a short retry is pending. The retry itself is driven by
+    the magpie-retry systemd timer (restart-proof), not an in-process timer;
+    this only tracks the attempt budget and an indicative next-retry time for
+    the dashboard. A fresh scheduled cycle grants a new budget."""
+    if fresh_cycle:
+        db.set_setting(conn, "retry_attempts", "0")
     failed = _failed_sleeves(results)
-    if not failed or attempt > CYCLE_RETRY_MAX:
+    pending = bool(failed) and int(db.get_setting(conn, "retry_attempts") or 0) < CYCLE_RETRY_MAX
+    if pending:
+        when = datetime.now(timezone.utc) + timedelta(minutes=CYCLE_RETRY_MINS)
+        db.set_setting(conn, "retry_cycle_at", when.isoformat(timespec="seconds"))
+    else:
         db.set_setting(conn, "retry_cycle_at", "")
-        return
-    when = datetime.now(timezone.utc) + timedelta(minutes=CYCLE_RETRY_MINS)
-    db.set_setting(conn, "retry_cycle_at", when.isoformat(timespec="seconds"))
-    LOGGER.warning("scheduling short retry #%d of %s in %d min",
-                   attempt, failed, CYCLE_RETRY_MINS)
-    _schedule(CYCLE_RETRY_MINS * 60, _run_retry, failed, attempt)
-
-
-def _run_retry(sleeve_names: list[str], attempt: int) -> None:
-    """Background short-retry of specific sleeves; reschedules if still failing."""
-    conn = db.connect()
-    mode = config.mode()
-    try:
-        db.set_setting(conn, "retry_cycle_at", "")  # this attempt is firing now
-        if db.get_setting(conn, "halted") == "1":
-            return
-        results = retry_sleeves(conn, mode, sleeve_names)
-        db.set_setting(conn, "last_cycle_at", _now())
-        _track_cycle_outcome(conn, results, crashed=False)
-        _maybe_schedule_retry(conn, results, attempt + 1)
-    except Exception:  # noqa: BLE001 - a retry must never crash the process
-        LOGGER.exception("short retry of %s failed", sleeve_names)
-    finally:
-        conn.close()
 
 
 def retry_sleeves(conn, mode: str, sleeve_names: list[str]) -> list[dict]:
@@ -224,8 +201,13 @@ def _latest_failed_sleeves(conn, mode: str) -> list[str]:
     return out
 
 
-def retry_now() -> dict:
-    """Retry every sleeve whose latest decision errored, immediately."""
+def retry_now(force: bool = False) -> dict:
+    """Retry every sleeve whose latest decision errored. Driven every few
+    minutes by the magpie-retry systemd timer; a no-op when nothing failed.
+
+    Bounded by CYCLE_RETRY_MAX consecutive attempts so a sustained outage
+    doesn't retry forever (each scheduled cycle resets the budget); `force`
+    (a manual retry) bypasses the cap."""
     conn = db.connect()
     mode = config.mode()
     try:
@@ -233,12 +215,20 @@ def retry_now() -> dict:
             return {"status": "halted"}
         failed = _latest_failed_sleeves(conn, mode)
         if not failed:
+            db.set_setting(conn, "retry_attempts", "0")
+            db.set_setting(conn, "retry_cycle_at", "")
             return {"status": "nothing-to-retry"}
+        attempts = int(db.get_setting(conn, "retry_attempts") or 0)
+        if attempts >= CYCLE_RETRY_MAX and not force:
+            db.set_setting(conn, "retry_cycle_at", "")  # wait for the next scheduled cycle
+            return {"status": "exhausted", "attempts": attempts}
         results = retry_sleeves(conn, mode, failed)
         db.set_setting(conn, "last_cycle_at", _now())
         _track_cycle_outcome(conn, results, crashed=False)
-        _maybe_schedule_retry(conn, results, attempt=1)
-        return {"status": "ok", "retried": failed, "results": results}
+        db.set_setting(conn, "retry_attempts", str(attempts + 1))
+        _note_retry_state(conn, results, fresh_cycle=False)
+        return {"status": "ok", "retried": failed, "attempt": attempts + 1,
+                "results": results}
     finally:
         conn.close()
 
