@@ -46,6 +46,26 @@ async def auth_gate(request, call_next):
     return await call_next(request)
 
 
+# The 🐦‍⬛ mark on the accent-green rounded square — reads on light *and* dark tab
+# bars (a bare dark emoji vanishes on a dark tab). Self-contained, no external req.
+FAVICON_SVG = ('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">'
+               '<rect width="100" height="100" rx="22" fill="#4cd97b"/>'
+               '<text x="50" y="55" font-size="60" text-anchor="middle" '
+               'dominant-baseline="central">\U0001f426‍⬛</text></svg>')
+FAVICON_LINK = '<link rel="icon" type="image/svg+xml" href="/favicon.svg">'
+
+
+@app.get("/favicon.svg")
+def favicon_svg():
+    return Response(FAVICON_SVG, media_type="image/svg+xml",
+                   headers={"Cache-Control": "max-age=86400"})
+
+
+@app.get("/favicon.ico")
+def favicon_ico():
+    return RedirectResponse("/favicon.svg", status_code=301)
+
+
 @app.get("/login", response_class=HTMLResponse)
 def login_page(bad: int = 0):
     err = ''
@@ -55,6 +75,7 @@ def login_page(bad: int = 0):
         err = '<p style="color:#ff6b6b">Wrong details.</p>'
     return f"""<!doctype html><html><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1"><title>Magpie — login</title>
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
 <style>body{{font-family:system-ui;background:#12151c;color:#e6e9f0;display:flex;min-height:100vh;
 margin:0;align-items:center;justify-content:center}}form{{background:#1a1f2b;border:1px solid #262d3c;
 border-radius:12px;padding:2rem;width:280px}}h1{{font-size:1.3rem;margin:0 0 1rem}}
@@ -386,6 +407,7 @@ def dashboard():
     return """<!doctype html><html><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Magpie</title>
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
 <style>
  body{font-family:system-ui;margin:1.5rem auto;padding:0 1rem;background:#12151c;color:#e6e9f0;max-width:980px}
  h1{font-size:1.4rem} .big{font-size:2rem;font-weight:700}
@@ -498,6 +520,7 @@ def settings_page():
     return """<!doctype html><html><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Magpie — settings</title>
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
 <style>
  body{font-family:system-ui;margin:1.5rem auto;padding:0 1rem;max-width:640px;
    background:#12151c;color:#e6e9f0}

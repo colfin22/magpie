@@ -19,7 +19,7 @@ COOKIE = "magpie_auth"
 # through Docker's port map so they can't rely on a localhost exemption).
 # Everything else — dashboard, portfolio state, settings (keys!), halt/resume —
 # is gated.
-PUBLIC_PATHS = {"/login", "/health", "/favicon.ico",
+PUBLIC_PATHS = {"/login", "/health", "/favicon.ico", "/favicon.svg",
                 "/api/cycle", "/api/digest", "/api/reconcile", "/api/review",
                 "/api/universe/refresh"}
 

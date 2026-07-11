@@ -137,3 +137,12 @@ def test_2fa_backup_endpoints(client, monkeypatch):
     # disable wipes them
     client.post("/api/2fa/disable", json={"code": pyotp.TOTP(s["secret"]).now()})
     assert client.get("/api/2fa").json()["backup_remaining"] == 0
+
+
+def test_favicon_is_public(client, monkeypatch):
+    monkeypatch.setattr(config, "DASHBOARD_PASSWORD", "hunter2")     # auth ON
+    r = client.get("/favicon.svg")
+    assert r.status_code == 200 and "image/svg+xml" in r.headers["content-type"]
+    assert r.text.startswith("<svg")
+    r2 = client.get("/favicon.ico")
+    assert r2.status_code == 301 and r2.headers["location"] == "/favicon.svg"
