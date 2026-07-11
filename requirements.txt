@@ -3,3 +3,5 @@ uvicorn[standard]==0.51.*
 httpx==0.28.*
 ccxt==4.5.64
 python-multipart==0.0.20
+pyotp==2.9.*
+qrcode==8.*

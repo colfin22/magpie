@@ -48,7 +48,11 @@ async def auth_gate(request, call_next):
 
 @app.get("/login", response_class=HTMLResponse)
 def login_page(bad: int = 0):
-    err = '<p style="color:#ff6b6b">Wrong password.</p>' if bad else ''
+    err = ''
+    if bad == 2:
+        err = '<p style="color:#ff6b6b">Enter your 6-digit 2FA code.</p>'
+    elif bad:
+        err = '<p style="color:#ff6b6b">Wrong details.</p>'
     return f"""<!doctype html><html><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1"><title>Magpie — login</title>
 <style>body{{font-family:system-ui;background:#12151c;color:#e6e9f0;display:flex;min-height:100vh;
@@ -60,19 +64,22 @@ border:0;border-radius:8px;padding:.6rem;font-weight:700;font-size:1rem;cursor:p
 </head><body><form method="post" action="/login"><h1>🐦‍⬛ Magpie</h1>{err}
 <input type="text" name="username" placeholder="Username" autofocus autocomplete="username">
 <input type="password" name="password" placeholder="Password" autocomplete="current-password">
+<input type="text" name="otp" inputmode="numeric" autocomplete="one-time-code" placeholder="2FA code (if enabled)">
 <button type="submit">Sign in</button></form></body></html>"""
 
 
 @app.post("/login")
-def login_submit(username: str = Form(""), password: str = Form("")):
+def login_submit(username: str = Form(""), password: str = Form(""), otp: str = Form("")):
     conn = db.connect()
     try:
-        if auth.check_login(conn, username, password):
-            resp = RedirectResponse("/", status_code=302)
-            resp.set_cookie(auth.COOKIE, auth.token(conn), httponly=True,
-                            max_age=30 * 86400, samesite="lax")
-            return resp
-        return RedirectResponse("/login?bad=1", status_code=302)
+        if not auth.check_login(conn, username, password):
+            return RedirectResponse("/login?bad=1", status_code=302)
+        if auth.totp_is_enabled(conn) and not auth.check_totp(conn, otp):
+            return RedirectResponse("/login?bad=2", status_code=302)  # password ok, code missing/wrong
+        resp = RedirectResponse("/", status_code=302)
+        resp.set_cookie(auth.COOKIE, auth.token(conn), httponly=True,
+                        max_age=30 * 86400, samesite="lax")
+        return resp
     finally:
         conn.close()
 
@@ -82,6 +89,55 @@ def logout():
     resp = RedirectResponse("/login", status_code=302)
     resp.delete_cookie(auth.COOKIE)
     return resp
+
+
+@app.get("/api/2fa")
+def api_2fa_status():
+    conn = db.connect()
+    try:
+        return {"enabled": auth.totp_is_enabled(conn), "password_set": auth.enabled()}
+    finally:
+        conn.close()
+
+
+@app.post("/api/2fa/setup")
+def api_2fa_setup():
+    """Mint a fresh secret and return the QR + manual code. Not active until
+    /api/2fa/enable confirms a code. Needs the first factor (a password) set."""
+    conn = db.connect()
+    try:
+        if not auth.enabled():
+            return Response(status_code=400, content="set a dashboard password first")
+        secret = auth.new_totp_secret(conn)
+        uri = auth.totp_uri(conn, secret)
+        return {"secret": secret, "uri": uri, "qr_svg": auth.totp_qr_svg(uri)}
+    finally:
+        conn.close()
+
+
+@app.post("/api/2fa/enable")
+def api_2fa_enable(body: dict = Body(...)):
+    conn = db.connect()
+    try:
+        if auth.enable_totp(conn, str(body.get("code", ""))):
+            return {"enabled": True}
+        return Response(status_code=400, content="that code didn't verify — check the time on your phone and try the current one")
+    finally:
+        conn.close()
+
+
+@app.post("/api/2fa/disable")
+def api_2fa_disable(body: dict = Body(...)):
+    conn = db.connect()
+    try:
+        if not auth.totp_is_enabled(conn):
+            return {"enabled": False}
+        if not auth.check_totp(conn, str(body.get("code", ""))):
+            return Response(status_code=400, content="enter a current code to turn 2FA off")
+        auth.disable_totp(conn)
+        return {"enabled": False}
+    finally:
+        conn.close()
 
 
 @app.get("/health")
@@ -515,6 +571,28 @@ deliberate environment change (<code>TRADING_ENABLED</code>), never a setting he
   <p class="eyebrow">Security</p>
   <label>Dashboard password</label><input id="DASHBOARD_PASSWORD" type="password" placeholder="">
   <p class="note">Set a password to require login for the dashboard and controls. Blank = keep current; clearing it (type a space then delete) leaves it unchanged — remove via the env to disable auth.</p>
+
+  <p style="margin-top:1.2rem"><b>Two-factor authentication (TOTP)</b> <span id="tfa-status" class="note"></span></p>
+  <div id="tfa-nopw" class="note" hidden>Set and save a dashboard password first — 2FA sits on top of it.</div>
+  <div id="tfa-off" hidden>
+    <button class="test" onclick="tfaSetup()">Set up 2FA</button>
+  </div>
+  <div id="tfa-setup" hidden>
+    <p class="note">Scan with Google Authenticator, Authy or 1Password, then enter a current code to confirm.</p>
+    <div id="tfa-qr" style="background:#fff;display:inline-block;padding:8px;border-radius:8px;max-width:200px"></div>
+    <p class="note">Or enter this key manually: <code id="tfa-secret"></code></p>
+    <input id="tfa-code" inputmode="numeric" autocomplete="one-time-code" placeholder="6-digit code">
+    <div class="row"><button class="test" onclick="tfaEnable()">Confirm &amp; enable</button>
+      <span class="result" id="tfa-r"></span></div>
+  </div>
+  <div id="tfa-on" hidden>
+    <p class="note">2FA is on. To turn it off, enter a current code.</p>
+    <input id="tfa-dcode" inputmode="numeric" autocomplete="one-time-code" placeholder="6-digit code">
+    <div class="row"><button class="test" onclick="tfaDisable()">Disable 2FA</button>
+      <span class="result" id="tfa-dr"></span></div>
+  </div>
+  <p class="note" style="margin-top:.6rem">Lost your authenticator? Clear it from the container:
+    <code>docker exec magpie sqlite3 /data/magpie.db "DELETE FROM settings WHERE key IN ('totp_enabled','totp_secret')"</code></p>
 </div>
 
 <div class="row"><button class="primary" onclick="save()">Save settings</button>
@@ -534,6 +612,37 @@ async function load(){
     const el = document.getElementById(k);
     el.placeholder = s[k] && s[k].set ? (s[k].hint + " — set, blank to keep") : "not set";
   });
+  tfaLoad();
+}
+async function tfaLoad(){
+  const s = await (await fetch('/api/2fa',{cache:'no-store'})).json();
+  const show = (id,on) => document.getElementById(id).hidden = !on;
+  document.getElementById('tfa-status').textContent = s.enabled ? '· on ✓' : '· off';
+  show('tfa-nopw', !s.password_set);
+  show('tfa-off', s.password_set && !s.enabled);
+  show('tfa-on', s.password_set && s.enabled);
+  show('tfa-setup', false);
+}
+async function tfaSetup(){
+  const r = await (await fetch('/api/2fa/setup',{method:'POST'})).json();
+  document.getElementById('tfa-qr').innerHTML = r.qr_svg;
+  document.getElementById('tfa-secret').textContent = r.secret;
+  document.getElementById('tfa-off').hidden = true;
+  document.getElementById('tfa-setup').hidden = false;
+}
+async function tfaEnable(){
+  const el = document.getElementById('tfa-r'); el.className='result dim'; el.textContent='checking…';
+  const r = await fetch('/api/2fa/enable',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({code:document.getElementById('tfa-code').value})});
+  if (r.ok){ el.className='result up'; el.textContent='✓ 2FA on'; tfaLoad(); }
+  else { el.className='result down'; el.textContent='✗ '+(await r.text()); }
+}
+async function tfaDisable(){
+  const el = document.getElementById('tfa-dr'); el.className='result dim'; el.textContent='checking…';
+  const r = await fetch('/api/2fa/disable',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({code:document.getElementById('tfa-dcode').value})});
+  if (r.ok){ el.className='result up'; el.textContent='✓ 2FA off'; tfaLoad(); }
+  else { el.className='result down'; el.textContent='✗ '+(await r.text()); }
 }
 async function refreshUniverse(){
   const el = document.getElementById('r-universe'); el.className='result dim'; el.textContent='refreshing…';

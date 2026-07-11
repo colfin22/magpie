@@ -194,6 +194,13 @@ cookie login; the health check and the timer-triggered action endpoints stay
 open (they expose no data). Leave it blank to run open on a trusted LAN or behind
 your own reverse-proxy auth.
 
+**Two-factor (TOTP).** Once a password is set, turn on 2FA from the Security card:
+scan the QR into Google Authenticator / Authy / 1Password, confirm a code, and
+every login then needs the 6-digit code as well as the password. It's standard
+TOTP, verified at login before the session cookie is issued. Lost your
+authenticator? Clear it from the container:
+`docker exec magpie sqlite3 /data/magpie.db "DELETE FROM settings WHERE key IN ('totp_enabled','totp_secret')"`.
+
 ## Licence
 
 MIT © 2026 [Colm Finn](https://github.com/colfin22).

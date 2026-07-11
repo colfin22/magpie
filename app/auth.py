@@ -56,3 +56,65 @@ def is_authed(request, conn) -> bool:
         return True  # the timers, on the same host
     cookie = request.cookies.get(COOKIE, "")
     return bool(cookie) and hmac.compare_digest(cookie, token(conn))
+
+
+# ---- optional TOTP second factor (checked at /login, before the cookie) ----
+# A valid session cookie already means "both factors passed", so is_authed and
+# the cookie are unchanged; 2FA only adds a step at login. Requires a password
+# (the first factor) to be meaningful. Secret lives in the settings table.
+
+def totp_is_enabled(conn) -> bool:
+    return db.get_setting(conn, "totp_enabled") == "1" and bool(_totp_secret(conn))
+
+
+def _totp_secret(conn) -> str:
+    return db.get_setting(conn, "totp_secret") or ""
+
+
+def new_totp_secret(conn) -> str:
+    """Mint a fresh secret (not active until a code confirms it)."""
+    import pyotp
+    sec = pyotp.random_base32()
+    db.set_setting(conn, "totp_secret", sec)
+    db.set_setting(conn, "totp_enabled", "0")
+    return sec
+
+
+def totp_uri(conn, secret: str | None = None) -> str:
+    import pyotp
+    sec = secret or _totp_secret(conn)
+    label = config.DASHBOARD_USER or "magpie"
+    return pyotp.TOTP(sec).provisioning_uri(name=label, issuer_name="Magpie")
+
+
+def check_totp(conn, code: str) -> bool:
+    import pyotp
+    sec = _totp_secret(conn)
+    code = str(code or "").strip().replace(" ", "")
+    if not sec or not code.isdigit():
+        return False
+    return pyotp.TOTP(sec).verify(code, valid_window=1)  # ±30s clock tolerance
+
+
+def enable_totp(conn, code: str) -> bool:
+    if check_totp(conn, code):
+        db.set_setting(conn, "totp_enabled", "1")
+        return True
+    return False
+
+
+def disable_totp(conn) -> None:
+    db.set_setting(conn, "totp_enabled", "0")
+    db.set_setting(conn, "totp_secret", "")
+
+
+def totp_qr_svg(uri: str) -> str:
+    """Inline SVG QR (pure-python, no PIL, no external requests → CSP-safe)."""
+    import io
+
+    import qrcode
+    import qrcode.image.svg
+    img = qrcode.make(uri, image_factory=qrcode.image.svg.SvgPathImage, border=2)
+    buf = io.BytesIO()
+    img.save(buf)
+    return buf.getvalue().decode()

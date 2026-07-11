@@ -39,3 +39,57 @@ def test_login_grants_access(client, monkeypatch):
     assert client.get("/api/settings").status_code == 200      # cookie now present
     client.post("/logout")
     assert client.get("/api/settings").status_code == 401      # logged out
+
+
+def test_totp_enable_verify_disable(client, monkeypatch):
+    import pyotp
+    from app import auth, db
+    monkeypatch.setattr(config, "DASHBOARD_PASSWORD", "hunter2")
+    conn = db.connect()
+    secret = auth.new_totp_secret(conn)
+    assert auth.totp_is_enabled(conn) is False                  # minted, not yet confirmed
+    assert auth.enable_totp(conn, "000000") is False            # wrong code won't activate
+    assert auth.enable_totp(conn, pyotp.TOTP(secret).now()) is True
+    assert auth.totp_is_enabled(conn) is True
+    assert auth.check_totp(conn, pyotp.TOTP(secret).now()) is True
+    assert auth.check_totp(conn, "123456") is False
+    auth.disable_totp(conn)
+    assert auth.totp_is_enabled(conn) is False
+    assert auth._totp_secret(conn) == ""
+    conn.close()
+
+
+def test_login_requires_totp_when_enabled(client, monkeypatch):
+    import pyotp
+    from app import auth, db
+    monkeypatch.setattr(config, "DASHBOARD_PASSWORD", "hunter2")
+    conn = db.connect(); secret = auth.new_totp_secret(conn)
+    auth.enable_totp(conn, pyotp.TOTP(secret).now()); conn.close()
+    # right password, no code -> bounced asking for the code (bad=2), no cookie
+    r = client.post("/login", data={"password": "hunter2"})
+    assert r.status_code == 302 and "bad=2" in r.headers["location"]
+    assert client.get("/api/settings").status_code == 401
+    # wrong password never reveals 2FA (bad=1)
+    r = client.post("/login", data={"password": "nope", "otp": pyotp.TOTP(secret).now()})
+    assert "bad=1" in r.headers["location"]
+    # right password + right code -> in
+    r = client.post("/login", data={"password": "hunter2", "otp": pyotp.TOTP(secret).now()})
+    assert r.status_code == 302 and r.headers["location"] == "/"
+
+
+def test_2fa_setup_needs_password(client, monkeypatch):
+    monkeypatch.setattr(config, "DASHBOARD_PASSWORD", "")
+    assert client.post("/api/2fa/setup").status_code == 400     # no first factor -> refuse
+
+
+def test_2fa_endpoints_end_to_end(client, monkeypatch):
+    import pyotp
+    monkeypatch.setattr(config, "DASHBOARD_PASSWORD", "hunter2")
+    client.post("/login", data={"password": "hunter2"})         # cookie (2FA not on yet)
+    s = client.post("/api/2fa/setup").json()
+    assert "svg" in s["qr_svg"].lower() and s["secret"] and s["uri"].startswith("otpauth://")
+    assert client.post("/api/2fa/enable", json={"code": "000000"}).status_code == 400
+    assert client.post("/api/2fa/enable", json={"code": pyotp.TOTP(s["secret"]).now()}).json()["enabled"] is True
+    assert client.get("/api/2fa").json()["enabled"] is True
+    assert client.post("/api/2fa/disable", json={"code": "000000"}).status_code == 400
+    assert client.post("/api/2fa/disable", json={"code": pyotp.TOTP(s["secret"]).now()}).json()["enabled"] is False
