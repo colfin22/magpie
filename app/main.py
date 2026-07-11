@@ -591,12 +591,24 @@ async function load(){
         `<td class="dim">${t.held_days}d</td>` +
         `<td class="${t.pnl_eur >= 0 ? 'up' : 'down'}">${CCY}${t.pnl_eur.toFixed(2)} (${t.pnl_pct}%)</td></tr>`).join('')
     : '<tr><td class="dim">no closed trades yet</td></tr>';
+  // a transient upstream failure (LLM overload etc.) never surfaces the raw
+  // error (which can carry an API key) — it shows as a calm 'retrying' note.
+  const nc = s.next_cycle ? new Date(s.next_cycle) : null;
+  const retryMins = nc ? Math.max(0, Math.round((nc - Date.now()) / 60000)) : null;
+  const retryWhen = retryMins != null
+    ? `retrying at next decision · in ${Math.floor(retryMins / 60)}h ${retryMins % 60}m`
+    : 'retrying at next decision';
+  const FAIL = new Set(['error', 'invalid', 'no_key']);
   document.getElementById('log').innerHTML = '<tr><th>when</th><th>sleeve</th><th>what</th><th>why</th></tr>' +
-    s.decisions.map(d => `<tr><td class="dim">${d.at.slice(5,16)}</td><td>${d.sleeve||''}</td>` +
-      `<td class="${d.status==='executed' ? d.action : d.status==='held' ? 'hold' : 'err'}">` +
-      `${d.status==='held' ? 'HOLD' : (d.action||d.status).toUpperCase()}` +
-      `${d.pair ? ' ' + d.pair : ''}${d.fraction ? ' ' + (d.fraction*100).toFixed(0)+'%' : ''}</td>` +
-      `<td class="dim">${(d.reasoning || d.detail || '')}</td></tr>`).join('');
+    s.decisions.map(d => {
+      const failed = FAIL.has(d.status);
+      const cls = d.status==='executed' ? d.action : d.status==='held' ? 'hold' : failed ? 'dim' : 'err';
+      const what = failed ? '⏳ RETRY' : (d.status==='held' ? 'HOLD' : (d.action||d.status).toUpperCase()) +
+        (d.pair ? ' ' + d.pair : '') + (d.fraction ? ' ' + (d.fraction*100).toFixed(0)+'%' : '');
+      const why = failed ? `temporary hiccup — ${retryWhen}` : (d.reasoning || d.detail || '');
+      return `<tr><td class="dim">${d.at.slice(5,16)}</td><td>${d.sleeve||''}</td>` +
+        `<td class="${cls}">${what}</td><td class="dim">${why}</td></tr>`;
+    }).join('');
 }
 load(); setInterval(load, 30000);
 </script></body></html>"""

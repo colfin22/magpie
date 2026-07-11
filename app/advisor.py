@@ -11,6 +11,7 @@ OpenAI-compatible chat/completions shape; Gemini and Anthropic are special.
 import json
 import logging
 import re
+import time
 
 import httpx
 
@@ -164,9 +165,44 @@ def _call_openai_compat(base: str, key: str, model: str, prompt: str,
     return r.json()["choices"][0]["message"]["content"]
 
 
+RETRY_ATTEMPTS = 3       # total tries before a transient failure gives up
+RETRY_BACKOFF_S = 1.0    # base backoff; grows 1s, 2s, … between tries
+
+# A Gemini call carries the API key as a ?key= query param, so raise_for_status'
+# error string leaks it. Scrub it before anything reaches the ledger or the page.
+_SECRET_RE = re.compile(r"(key=)[\w.\-]+", re.I)
+
+
+def _redact(msg: str) -> str:
+    return _SECRET_RE.sub(r"\1REDACTED", msg)
+
+
+def _retryable(e: Exception) -> bool:
+    """Transient failures worth another attempt: provider overload / rate-limit
+    (HTTP 5xx or 429) and network/timeout blips. Auth (4xx) and malformed-shape
+    errors (KeyError/IndexError) are not — they won't fix themselves."""
+    if isinstance(e, httpx.HTTPStatusError):
+        code = e.response.status_code
+        return code == 429 or code >= 500
+    return isinstance(e, httpx.TransportError)  # covers timeouts + connect/read
+
+
+def _call(provider: str, key: str, chosen: str, prompt: str, http: httpx.Client) -> str:
+    if provider == "gemini":
+        return _call_gemini(key, chosen, prompt, http)
+    if provider == "anthropic":
+        return _call_anthropic(key, chosen, prompt, http)
+    base, _, _, json_mode = OPENAI_COMPAT[provider]
+    return _call_openai_compat(base, key, chosen, prompt, http, json_mode)
+
+
 def ask(prompt: str, http: httpx.Client | None = None,
         model: str | None = None, deep: bool = False) -> str:
-    """Raw model call against the configured provider. Returns the JSON text."""
+    """Raw model call against the configured provider. Returns the JSON text.
+
+    Transient upstream failures (503 overload, 429, timeouts) are retried with
+    exponential backoff; only a sustained outage surfaces as an AdvisorError
+    (which the engine turns into a safe HOLD)."""
     provider = active_provider()
     key = key_for(provider)
     if not key:
@@ -175,16 +211,18 @@ def ask(prompt: str, http: httpx.Client | None = None,
     own = http is None
     http = http or httpx.Client(timeout=120)
     try:
-        if provider == "gemini":
-            text = _call_gemini(key, chosen, prompt, http)
-        elif provider == "anthropic":
-            text = _call_anthropic(key, chosen, prompt, http)
-        else:
-            base, _, _, json_mode = OPENAI_COMPAT[provider]
-            text = _call_openai_compat(base, key, chosen, prompt, http, json_mode)
-        return _strip_fences(text)
-    except (httpx.HTTPError, KeyError, IndexError) as e:
-        raise AdvisorError(f"{provider} call failed: {e}") from e
+        for attempt in range(1, RETRY_ATTEMPTS + 1):
+            try:
+                return _strip_fences(_call(provider, key, chosen, prompt, http))
+            except (httpx.HTTPError, KeyError, IndexError) as e:
+                if attempt < RETRY_ATTEMPTS and _retryable(e):
+                    wait = RETRY_BACKOFF_S * (2 ** (attempt - 1))
+                    LOGGER.warning("%s call failed (%s); retry %d/%d in %.0fs",
+                                   provider, _redact(str(e)), attempt,
+                                   RETRY_ATTEMPTS - 1, wait)
+                    time.sleep(wait)
+                    continue
+                raise AdvisorError(f"{provider} call failed: {_redact(str(e))}") from e
     finally:
         if own:
             http.close()

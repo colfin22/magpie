@@ -1,6 +1,7 @@
 """Multi-provider brain dispatch. The prompt/validation layers are covered
 elsewhere; here we prove ask() hits the right API shape per LLM_PROVIDER and
 that model resolution + fence-stripping + the no-key guard behave."""
+import httpx
 import pytest
 
 from app import advisor, config
@@ -118,3 +119,76 @@ def test_no_key_raises(monkeypatch):
 def test_unknown_provider_falls_back_to_gemini(monkeypatch):
     monkeypatch.setattr(config, "LLM_PROVIDER", "bogus")
     assert advisor.active_provider() == "gemini"
+
+
+# --- retry / redaction (transient-failure resilience) --------------------
+
+GEMINI_OK = {"candidates": [{"content": {"parts": [{"text": ANSWER}]}}]}
+
+
+def _status_error(code):
+    req = httpx.Request("POST", "http://x")
+    return httpx.HTTPStatusError("boom", request=req,
+                                 response=httpx.Response(code, request=req))
+
+
+class FlakyHTTP:
+    """Raises `exc` for the first `fail_times` posts, then returns `payload`."""
+    def __init__(self, payload, exc, fail_times):
+        self.payload, self.exc, self.fail_times, self.calls = payload, exc, fail_times, 0
+
+    def post(self, url, headers=None, params=None, json=None):
+        self.calls += 1
+        if self.calls <= self.fail_times:
+            raise self.exc
+        return FakeResp(self.payload)
+
+
+def _gemini(monkeypatch, no_sleep=True):
+    monkeypatch.setattr(config, "LLM_PROVIDER", "gemini")
+    monkeypatch.setattr(config, "GEMINI_API_KEY", "k")
+    if no_sleep:
+        monkeypatch.setattr(advisor.time, "sleep", lambda s: None)
+
+
+def test_retries_transient_503_then_succeeds(monkeypatch):
+    _gemini(monkeypatch)
+    http = FlakyHTTP(GEMINI_OK, _status_error(503), fail_times=2)
+    assert advisor.ask("p", http=http) == ANSWER
+    assert http.calls == 3                      # two 503s, third OK
+
+
+def test_retries_on_timeout(monkeypatch):
+    _gemini(monkeypatch)
+    http = FlakyHTTP(GEMINI_OK, httpx.ConnectTimeout("slow"), fail_times=1)
+    assert advisor.ask("p", http=http) == ANSWER
+    assert http.calls == 2
+
+
+def test_auth_4xx_not_retried(monkeypatch):
+    _gemini(monkeypatch)
+    sleeps = []
+    monkeypatch.setattr(advisor.time, "sleep", lambda s: sleeps.append(s))
+    http = FlakyHTTP({}, _status_error(401), fail_times=99)
+    with pytest.raises(advisor.AdvisorError):
+        advisor.ask("p", http=http)
+    assert http.calls == 1                      # auth error won't fix itself
+    assert sleeps == []
+
+
+def test_exhausted_retries_redact_api_key(monkeypatch):
+    _gemini(monkeypatch)
+    exc = httpx.HTTPStatusError(
+        "503 for url https://x/models/gemini:generateContent?key=AQ.SECRET123",
+        request=httpx.Request("POST", "http://x"),
+        response=httpx.Response(503, request=httpx.Request("POST", "http://x")))
+    http = FlakyHTTP({}, exc, fail_times=99)
+    with pytest.raises(advisor.AdvisorError) as ei:
+        advisor.ask("p", http=http)
+    assert http.calls == 3                      # tried the full budget
+    assert "AQ.SECRET123" not in str(ei.value)
+    assert "key=REDACTED" in str(ei.value)
+
+
+def test_redact_strips_api_key():
+    assert advisor._redact("...?key=AQ.abc-123 more") == "...?key=REDACTED more"
