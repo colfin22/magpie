@@ -16,8 +16,8 @@ you a daily digest. Your only control is the halt button — by design.
 
 <p align="center">
   <img src="docs/screenshots/dashboard-preview.png" width="92%"
-       alt="The Magpie dashboard — equity vs buy-and-hold, the four sleeves, closed trades, vault skims, the monthly lessons note and the decision diary">
-  <br><sub>Dashboard six weeks in (simulated preview data — a fresh install starts humbler).</sub>
+       alt="The Magpie dashboard — the dynamic alt universe, equity vs buy-and-hold, the four sleeves holding SOL/XRP/TRX/BTC, closed alt trades, vault skims, the monthly lessons note and the decision diary including a top-10 sell-floor auto-exit">
+  <br><sub>Dashboard a few months in, trading the top-5 alt universe (simulated preview data — a fresh install starts humbler).</sub>
 </p>
 
 ## How it thinks

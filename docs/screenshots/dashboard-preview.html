@@ -1,0 +1,256 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Magpie — dashboard preview</title>
+<style>
+  :root{
+    --bg:#0f1219; --panel:#161b26; --panel2:#1a2030; --line:#232b3b;
+    --ink:#e7ebf3; --dim:#8b93a7; --faint:#5c6478;
+    --green:#4cd97b; --greendim:#2e7d52; --red:#ff6b6b; --purple:#a78bfa; --blue:#5b8cff;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0}
+  body{background:var(--bg);color:var(--ink);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    -webkit-font-smoothing:antialiased;padding:26px 30px 34px;width:1180px}
+  .wrap{max-width:1180px;margin:0 auto}
+  h1{font-size:0}
+  .head{display:flex;align-items:center;gap:14px;margin:2px 0 22px}
+  .logo{font-size:30px;line-height:1}
+  .name{font-size:26px;font-weight:800;letter-spacing:-.4px}
+  .pill{font-size:11px;font-weight:800;letter-spacing:.6px;padding:4px 9px;border-radius:999px;text-transform:uppercase}
+  .pill.live{color:var(--green);border:1px solid var(--greendim);background:rgba(76,217,123,.08)}
+  .pill.sim{color:var(--purple);border:1px solid #4a3f7a;background:rgba(167,139,250,.08)}
+  .spacer{flex:1}
+  .stamp{color:var(--faint);font-size:12.5px}
+  .universe{display:flex;align-items:center;gap:7px;margin:-8px 0 20px;color:var(--dim);font-size:12.5px;flex-wrap:wrap}
+  .universe .lbl{color:var(--faint);text-transform:uppercase;letter-spacing:.6px;font-size:11px;font-weight:700;margin-right:2px}
+  .chip{font-size:12px;font-weight:700;padding:3px 9px;border-radius:7px;background:var(--panel2);border:1px solid var(--line);color:#c7cede}
+  .chip.new{color:var(--green);border-color:var(--greendim)}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:22px 24px}
+  .eyebrow{color:var(--faint);font-size:11px;font-weight:800;letter-spacing:.9px;text-transform:uppercase;margin:0 0 10px}
+  .hero{display:grid;grid-template-columns:340px 1fr;gap:26px}
+  .big{font-size:52px;font-weight:800;letter-spacing:-1.5px;line-height:1;margin:2px 0 8px}
+  .up{color:var(--green)} .down{color:var(--red)}
+  .heroline{font-size:15px;font-weight:700}
+  .sub{color:var(--dim);font-size:13.5px;line-height:1.5;margin-top:14px}
+  .sub b{color:var(--ink)}
+  .fg{margin-top:12px;color:var(--dim);font-size:13px}
+  .charthead{display:flex;align-items:center;gap:18px;font-size:12.5px;color:var(--dim);margin-bottom:6px}
+  .charthead .k{display:flex;align-items:center;gap:6px}
+  .swatch{width:16px;height:3px;border-radius:2px;display:inline-block}
+  .chartmeta{margin-left:auto;color:var(--faint)}
+  .grid4{display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-top:16px}
+  .sleeve .top{display:flex;justify-content:space-between;align-items:flex-start}
+  .badge{font-size:12px;font-weight:800;padding:3px 8px;border-radius:7px}
+  .badge.up{background:rgba(76,217,123,.12)} .badge.down{background:rgba(255,107,107,.12)}
+  .badge.skim{background:rgba(167,139,250,.14);color:var(--purple)}
+  .sleeve .val{font-size:30px;font-weight:800;letter-spacing:-.8px;margin:12px 0 4px}
+  .sleeve .desc{color:var(--dim);font-size:12.5px;min-height:18px}
+  .spark{margin-top:16px}
+  .row2{display:grid;grid-template-columns:1.35fr 1fr;gap:16px;margin-top:16px}
+  table{width:100%;border-collapse:collapse}
+  th{color:var(--faint);font-size:10.5px;font-weight:800;letter-spacing:.7px;text-transform:uppercase;text-align:left;padding:0 10px 10px 0}
+  td{padding:9px 10px 9px 0;font-size:13px;border-top:1px solid var(--line)}
+  .tp{text-align:right} thead th.tp{text-align:right}
+  .mono{font-variant-numeric:tabular-nums}
+  .tag{color:var(--dim);font-size:12.5px;font-weight:600}
+  .skims td{font-size:13px}
+  .lessons{margin-top:20px;border-top:1px solid var(--line);padding-top:16px}
+  .lessons .lbl{color:var(--faint);font-size:10.5px;font-weight:800;letter-spacing:.7px;text-transform:uppercase}
+  .lessons p{color:#c7cede;font-size:13px;line-height:1.6;margin:8px 0 0;font-style:italic}
+  .dec td{padding:13px 10px 13px 0;vertical-align:top}
+  .dec .why{color:var(--dim);font-size:12.5px;line-height:1.5;max-width:560px}
+  .act{font-weight:800;font-size:13px}
+  .act.hold{color:var(--dim)} .act.buy{color:var(--green)} .act.sell{color:var(--blue)} .act.auto{color:var(--purple)}
+  .when{color:var(--faint);font-size:12px;white-space:nowrap}
+  .slv{font-weight:700;font-size:12.5px}
+  .stat{margin-left:auto;color:var(--dim);font-size:12.5px;font-weight:700}
+  .cardhead{display:flex;align-items:baseline;margin-bottom:14px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="head">
+    <span class="logo">🐦‍⬛</span>
+    <span class="name">Magpie</span>
+    <span class="pill live">● Live</span>
+    <span class="pill sim">Preview · simulated data</span>
+    <span class="spacer"></span>
+    <span class="stamp">updated 18:00:11 · 21 Sep 2026</span>
+  </div>
+
+  <div class="universe">
+    <span class="lbl">Universe</span>
+    <span class="chip">BTC</span><span class="chip">ETH</span>
+    <span class="chip">BNB</span><span class="chip">XRP</span>
+    <span class="chip">SOL</span><span class="chip new">TRX</span>
+    <span style="color:var(--faint)">· top-5 alts by market cap, refreshed weekly</span>
+  </div>
+
+  <!-- HERO + CHART -->
+  <div class="card hero">
+    <div>
+      <p class="eyebrow">Total portfolio</p>
+      <div class="big">€112.40</div>
+      <div class="heroline up">+€14.49 (+14.8%) on €97.91 invested</div>
+      <div class="sub">vs buy-and-hold <b>€106.20</b><br>the magpie is <b>+€6.20 ahead</b> of doing nothing</div>
+      <div class="fg">Fear &amp; Greed 61 · Greed</div>
+    </div>
+    <div>
+      <div class="charthead">
+        <span class="k"><span class="swatch" style="background:var(--green)"></span>Magpie</span>
+        <span class="k"><span class="swatch" style="background:var(--purple);opacity:.8"></span>Buy &amp; hold</span>
+        <span class="chartmeta">12 Jul → 21 Sep · €50 top-up 1 Aug</span>
+      </div>
+      <svg viewBox="0 0 760 300" width="100%" height="300" preserveAspectRatio="none" font-family="inherit">
+        <!-- gridlines -->
+        <g stroke="#232b3b" stroke-width="1">
+          <line x1="40" y1="20"  x2="740" y2="20"/>
+          <line x1="40" y1="76"  x2="740" y2="76"/>
+          <line x1="40" y1="132" x2="740" y2="132"/>
+          <line x1="40" y1="188" x2="740" y2="188"/>
+          <line x1="40" y1="244" x2="740" y2="244"/>
+        </g>
+        <g fill="#5c6478" font-size="11" text-anchor="end">
+          <text x="34" y="24">€120</text><text x="34" y="80">€100</text>
+          <text x="34" y="136">€80</text><text x="34" y="192">€60</text><text x="34" y="248">€40</text>
+        </g>
+        <!-- top-up marker -->
+        <line x1="330" y1="20" x2="330" y2="244" stroke="#39425a" stroke-width="1" stroke-dasharray="4 4"/>
+        <text x="336" y="60" fill="#8b93a7" font-size="11">+€50 top-up</text>
+        <!-- magpie area -->
+        <path d="M40,196 L110,198 L180,193 L250,197 L330,192 L330,120 L400,112 L470,104 L540,96 L610,90 L680,82 L740,74 L740,244 L40,244 Z"
+              fill="url(#g)" opacity="0.5"/>
+        <defs><linearGradient id="g" x1="0" x2="0" y1="0" y2="1">
+          <stop offset="0" stop-color="#4cd97b" stop-opacity="0.30"/>
+          <stop offset="1" stop-color="#4cd97b" stop-opacity="0"/>
+        </linearGradient></defs>
+        <!-- buy&hold dashed -->
+        <polyline fill="none" stroke="#a78bfa" stroke-width="2" stroke-dasharray="6 5" opacity="0.85"
+          points="40,197 110,199 180,195 250,198 330,194 400,120 470,114 540,110 610,106 680,100 740,96"/>
+        <!-- magpie line -->
+        <polyline fill="none" stroke="#4cd97b" stroke-width="2.5"
+          points="40,196 110,198 180,193 250,197 330,192 400,112 470,104 540,96 610,90 680,82 740,74"/>
+        <circle cx="740" cy="74" r="3.5" fill="#4cd97b"/>
+        <text x="726" y="66" fill="#4cd97b" font-size="11" text-anchor="end">€112.40</text>
+        <circle cx="740" cy="96" r="3" fill="#a78bfa"/>
+        <text x="726" y="112" fill="#a78bfa" font-size="11" text-anchor="end">€106.20</text>
+        <g fill="#5c6478" font-size="11" text-anchor="middle">
+          <text x="40" y="262">12 Jul</text><text x="250" y="262">1 Aug</text>
+          <text x="470" y="262">28 Aug</text><text x="740" y="262">21 Sep</text>
+        </g>
+      </svg>
+    </div>
+  </div>
+
+  <!-- SLEEVES -->
+  <div class="grid4">
+    <div class="card sleeve">
+      <div class="top"><span class="eyebrow" style="margin:0">Swing · 3-day</span><span class="badge up up">+€5.56</span></div>
+      <div class="val">€38.20</div>
+      <div class="desc">holding <b style="color:#c7cede">SOL</b> · 9 trades · 67% wins</div>
+      <svg class="spark" width="100%" height="34" viewBox="0 0 200 34" preserveAspectRatio="none">
+        <polyline fill="none" stroke="#4cd97b" stroke-width="2" points="0,26 20,24 40,25 60,20 80,22 100,16 120,18 140,12 160,14 180,8 200,6"/>
+      </svg>
+    </div>
+    <div class="card sleeve">
+      <div class="top"><span class="eyebrow" style="margin:0">Fortnight · 1–2 wk</span><span class="badge up up">+€0.86</span></div>
+      <div class="val">€33.50</div>
+      <div class="desc">holding <b style="color:#c7cede">XRP</b> · 4 trades · 50% wins</div>
+      <svg class="spark" width="100%" height="34" viewBox="0 0 200 34" preserveAspectRatio="none">
+        <polyline fill="none" stroke="#4cd97b" stroke-width="2" points="0,20 20,22 40,19 60,21 80,18 100,20 120,17 140,19 160,15 180,17 200,14"/>
+      </svg>
+    </div>
+    <div class="card sleeve">
+      <div class="top"><span class="eyebrow" style="margin:0">Quarter · 3-month</span><span class="badge up up">+€2.16</span></div>
+      <div class="val">€34.80</div>
+      <div class="desc">holding <b style="color:#c7cede">TRX</b> since 2 Sep · 2 trades</div>
+      <svg class="spark" width="100%" height="34" viewBox="0 0 200 34" preserveAspectRatio="none">
+        <polyline fill="none" stroke="#4cd97b" stroke-width="2" points="0,24 20,22 40,23 60,19 80,20 100,17 120,18 140,14 160,15 180,12 200,11"/>
+      </svg>
+    </div>
+    <div class="card sleeve">
+      <div class="top"><span class="eyebrow" style="margin:0">Vault · profits</span><span class="badge skim">4 skims</span></div>
+      <div class="val">€5.90</div>
+      <div class="desc">holding <b style="color:#c7cede">BTC</b> · long-term store</div>
+      <svg class="spark" width="100%" height="34" viewBox="0 0 200 34" preserveAspectRatio="none">
+        <polyline fill="none" stroke="#a78bfa" stroke-width="2" points="0,30 40,30 40,24 90,24 90,17 140,17 140,10 190,10 190,6 200,6"/>
+      </svg>
+    </div>
+  </div>
+
+  <!-- CLOSED TRADES + VAULT/LESSONS -->
+  <div class="row2">
+    <div class="card">
+      <div class="cardhead"><span class="eyebrow" style="margin:0">Closed trades</span><span class="stat">6 closed · 67% wins · +€4.83</span></div>
+      <table>
+        <thead><tr><th>Sleeve</th><th>Pair</th><th>In → out</th><th>Held</th><th class="tp">P/L</th></tr></thead>
+        <tbody class="mono">
+          <tr><td class="slv">swing</td><td>SOL/EUR</td><td>132.10 → 145.60</td><td>2.4d</td><td class="tp up">+€1.55 (+6.1%)</td></tr>
+          <tr><td class="slv">swing</td><td>BNB/EUR</td><td>548.0 → 571.2</td><td>1.8d</td><td class="tp up">+€0.86 (+4.2%)</td></tr>
+          <tr><td class="slv">fortnight</td><td>ETH/EUR</td><td>2,388 → 2,505</td><td>8.0d</td><td class="tp up">+€0.92 (+4.9%)</td></tr>
+          <tr><td class="slv">swing</td><td>XRP/EUR</td><td>0.501 → 0.489</td><td>1.2d</td><td class="tp down">−€0.18 (−2.4%)</td></tr>
+          <tr><td class="slv">swing</td><td>SOL/EUR</td><td>128.40 → 141.20</td><td>2.1d</td><td class="tp up">+€1.24 (+4.8%)</td></tr>
+          <tr><td class="slv">quarter</td><td>TRX/EUR</td><td>0.271 → 0.289</td><td>9.0d</td><td class="tp up">+€0.44 (+6.6%)</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="card">
+      <p class="eyebrow">Vault skims</p>
+      <table class="skims">
+        <thead><tr><th>Date</th><th>From</th><th class="tp">Amount</th></tr></thead>
+        <tbody class="mono">
+          <tr><td>24 Jul</td><td class="tag">swing</td><td class="tp">€0.94</td></tr>
+          <tr><td>6 Aug</td><td class="tag">swing</td><td class="tp">€1.15</td></tr>
+          <tr><td>13 Aug</td><td class="tag">quarter</td><td class="tp">€1.13</td></tr>
+          <tr><td>1 Sep</td><td class="tag">swing</td><td class="tp">€1.28</td></tr>
+        </tbody>
+      </table>
+      <div class="lessons">
+        <span class="lbl">Lessons note · 1 Sep review</span>
+        <p>"My best trades were momentum entries on alts breaking above the 4h EMA20 — SOL and BNB paid twice each. XRP chops; I over-trade it. Let quarter's TRX runner breathe. The fee hurdle still punishes anything under a ~3% move."</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- RECENT DECISIONS -->
+  <div class="card" style="margin-top:16px">
+    <p class="eyebrow">Recent decisions</p>
+    <table class="dec">
+      <thead><tr><th>When</th><th>Sleeve</th><th>Decision</th><th>Why</th></tr></thead>
+      <tbody>
+        <tr>
+          <td class="when">21 Sep 18:00</td><td class="slv">swing</td>
+          <td class="act hold">HOLD</td>
+          <td class="why">SOL consolidating above the 4h EMA20 after the breakout; no fresh edge that clears the fee hurdle.</td>
+        </tr>
+        <tr>
+          <td class="when">21 Sep 12:00</td><td class="slv">fortnight</td>
+          <td class="act buy">BUY XRP/EUR 100%</td>
+          <td class="why">Daily trend turned up with RSI reset to 52 after the pullback; rotating idle cash into the stronger of the tracked alts.</td>
+        </tr>
+        <tr>
+          <td class="when">21 Sep 05:20</td><td class="slv">swing</td>
+          <td class="act auto">SELL DOGE/EUR 100%</td>
+          <td class="why">Auto-exit — DOGE fell past the top-10 sell floor at the weekly universe refresh; proceeds returned to swing cash.</td>
+        </tr>
+        <tr>
+          <td class="when">20 Sep 18:00</td><td class="slv">swing</td>
+          <td class="act sell">SELL SOL/EUR 40%</td>
+          <td class="why">Trimming into strength after a 6% pop — banking a partial win and keeping the runner, per the lessons note.</td>
+        </tr>
+        <tr>
+          <td class="when">19 Sep 06:00</td><td class="slv">quarter</td>
+          <td class="act hold">HOLD</td>
+          <td class="why">TRX position +8.1%; weekly uptrend intact — no reason to interrupt a working three-month position.</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+</div>
+</body>
+</html>
