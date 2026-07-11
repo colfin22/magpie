@@ -146,3 +146,69 @@ def test_apply_universe_base_only_when_disabled(monkeypatch):
         assert config.PAIRS == ["BTC/EUR", "ETH/EUR"]  # dynamic ignored while disabled
     finally:
         conn.close(); os.unlink(p)
+
+
+def test_resolve_pair():
+    assert universe.resolve_pair("ada") == "ADA/EUR"
+    assert universe.resolve_pair("  link/eur ") == "LINK/EUR"
+    with pytest.raises(ValueError):
+        universe.resolve_pair("ada/usd")          # bot trades EUR only
+    with pytest.raises(ValueError):
+        universe.resolve_pair("")
+
+
+def test_validate_tradeable(monkeypatch):
+    monkeypatch.setattr(universe.market, "exchange", lambda: FakeMarkets(["ADA/EUR"]))
+    universe.validate_tradeable("ADA/EUR")         # active spot -> ok
+    with pytest.raises(ValueError):
+        universe.validate_tradeable("FOO/EUR")     # not on Kraken
+
+
+def test_apply_universe_includes_manual(monkeypatch):
+    conn, p = make_db()
+    monkeypatch.setattr(config, "DYNAMIC_UNIVERSE_ENABLED", False)
+    monkeypatch.setattr(config, "BASE_PAIRS", ["BTC/EUR", "ETH/EUR"])
+    monkeypatch.setattr(config, "MANUAL_PAIRS", ["ADA/EUR"])
+    try:
+        config.apply_universe(conn)
+        assert config.PAIRS == ["BTC/EUR", "ETH/EUR", "ADA/EUR"]   # manual works even with dynamic OFF
+    finally:
+        conn.close(); os.unlink(p)
+
+
+def test_manual_pair_exempt_from_sell_floor(monkeypatch):
+    conn, p = make_db()
+    monkeypatch.setattr(config, "DYNAMIC_UNIVERSE_ENABLED", True)
+    monkeypatch.setattr(config, "DYNAMIC_TOP_N", 2)
+    monkeypatch.setattr(config, "DYNAMIC_SELL_FLOOR_N", 3)
+    monkeypatch.setattr(config, "BASE_PAIRS", ["BTC/EUR"])
+    monkeypatch.setattr(config, "MANUAL_PAIRS", ["ADA/EUR"])       # pinned
+    monkeypatch.setattr(universe.ha, "notify", lambda t, m: True)
+    cg = FakeCG(["ETH", "SOL", "XRP"])                            # ADA nowhere near the top -> below floor
+    monkeypatch.setattr(universe.market, "exchange",
+                        lambda: FakeMarkets(["ETH/EUR", "SOL/EUR", "XRP/EUR", "ADA/EUR"]))
+    conn.execute("INSERT INTO holdings(mode, sleeve, asset, amount) VALUES('paper','swing','ADA',5)")
+    conn.commit()
+    r = universe.refresh(conn, http=cg)
+    assert r["sold"] == []                                        # pinned coin is never force-sold
+    from app import portfolio
+    assert portfolio.holdings(conn, "paper", "swing").get("ADA") == 5
+    conn.close(); os.unlink(p)
+
+
+def test_pairs_add_remove_endpoints(monkeypatch, tmp_path):
+    from fastapi.testclient import TestClient
+    from app import main
+    monkeypatch.setattr(config, "DB_PATH", str(tmp_path / "t.db"))
+    monkeypatch.setattr(config, "DASHBOARD_PASSWORD", "")          # auth off
+    monkeypatch.setattr(config, "BASE_PAIRS", ["BTC/EUR"])
+    monkeypatch.setattr(config, "MANUAL_PAIRS", [])
+    monkeypatch.setattr(universe.market, "exchange", lambda: FakeMarkets(["ADA/EUR", "BTC/EUR"]))
+    c = TestClient(main.app)
+    assert c.post("/api/pairs/add", json={"symbol": "FOO"}).status_code == 400      # not on Kraken
+    assert c.post("/api/pairs/add", json={"symbol": "ADA/USD"}).status_code == 400  # non-EUR
+    r = c.post("/api/pairs/add", json={"symbol": "ada"})
+    assert r.status_code == 200 and "ADA/EUR" in r.json()["manual"] and "ADA/EUR" in r.json()["effective"]
+    assert "ADA/EUR" in c.get("/api/pairs").json()["manual"]
+    r = c.post("/api/pairs/remove", json={"pair": "ADA/EUR"})
+    assert r.status_code == 200 and "ADA/EUR" not in r.json()["manual"]

@@ -186,6 +186,12 @@ is it force-sold at the weekly refresh — the band between the two is a grace
 zone the model manages itself. Base pairs are never auto-sold, and sub-€1 dust
 is left in place. `GET /api/universe` shows the current set.
 
+**Pin your own coins.** Beyond the base pairs and the auto-tracked alts, add any
+coin that trades against EUR on Kraken from the settings page's **Custom coins**
+card (or `MANUAL_PAIRS` / `POST /api/pairs/add {symbol}`). Each is validated
+against Kraken before it's saved, is always tradeable regardless of the rankings,
+and — because you chose it deliberately — is **exempt from the sell floor**.
+
 
 ## Login (optional)
 

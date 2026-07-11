@@ -35,6 +35,8 @@ TRADING_ENABLED = os.environ.get("TRADING_ENABLED", "false").lower() == "true"
 # the universe: BASE_PAIRS are always tradeable; the dynamic top-alt set (when
 # enabled) is layered on top. PAIRS is the EFFECTIVE universe everything reads.
 BASE_PAIRS = [p.strip() for p in os.environ.get("PAIRS", "BTC/EUR,ETH/EUR").split(",") if p.strip()]
+# manually pinned coins — always tradeable, exempt from the dynamic sell floor
+MANUAL_PAIRS = [p.strip() for p in os.environ.get("MANUAL_PAIRS", "").split(",") if p.strip()]
 PAIRS = list(BASE_PAIRS)
 DYNAMIC_UNIVERSE_ENABLED = os.environ.get("DYNAMIC_UNIVERSE", "false").lower() == "true"
 DYNAMIC_TOP_N = int(os.environ.get("DYNAMIC_TOP_N", "5"))
@@ -79,7 +81,7 @@ EDITABLE = {
     "OPENROUTER_API_KEY": "str",
     "KRAKEN_API_KEY": "str", "KRAKEN_API_SECRET": "str",
     "HA_URL": "str", "HA_TOKEN": "str", "HA_NOTIFY_SERVICE": "str",
-    "PAIRS": "csv", "SKIM_FRACTION": "float",
+    "PAIRS": "csv", "MANUAL_PAIRS": "csv", "SKIM_FRACTION": "float",
     "DYNAMIC_UNIVERSE_ENABLED": "bool", "DYNAMIC_TOP_N": "int",
     "DYNAMIC_SELL_FLOOR_N": "int",
     "DASHBOARD_USER": "str", "DASHBOARD_PASSWORD": "str",
@@ -110,7 +112,8 @@ def _cast(key: str, raw: str):
 
 
 def apply_universe(conn) -> None:
-    """PAIRS (effective) = base pairs + the stored dynamic top-alt set (if on)."""
+    """PAIRS (effective) = base pairs + manually pinned coins + the stored
+    dynamic top-alt set (if on)."""
     import json
     import sys
     mod = sys.modules[__name__]
@@ -122,7 +125,7 @@ def apply_universe(conn) -> None:
                 dyn = json.loads(row[0])
             except Exception:  # noqa: BLE001
                 dyn = []
-    mod.PAIRS = list(dict.fromkeys(list(mod.BASE_PAIRS) + dyn))
+    mod.PAIRS = list(dict.fromkeys(list(mod.BASE_PAIRS) + list(mod.MANUAL_PAIRS) + dyn))
 
 
 def apply_overrides(conn) -> None:

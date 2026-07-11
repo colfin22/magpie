@@ -257,6 +257,54 @@ def api_universe_refresh():
         conn.close()
 
 
+def _save_manual_pairs(conn, pairs: list[str]) -> None:
+    db.set_setting(conn, "cfg_MANUAL_PAIRS", ",".join(pairs))
+    config.apply_overrides(conn)   # re-merge the effective universe now
+
+
+@app.get("/api/pairs")
+def api_pairs():
+    """The manually-pinned coins plus the full effective universe."""
+    conn = db.connect()
+    try:
+        return {"manual": list(config.MANUAL_PAIRS), "base": list(config.BASE_PAIRS),
+                "effective": list(config.PAIRS)}
+    finally:
+        conn.close()
+
+
+@app.post("/api/pairs/add")
+def api_pairs_add(body: dict = Body(...)):
+    """Pin any Kraken EUR spot coin into the universe (validated before saving)."""
+    conn = db.connect()
+    try:
+        try:
+            pair = universe.resolve_pair(str(body.get("symbol", "")))
+            universe.validate_tradeable(pair)
+        except ValueError as e:
+            return Response(status_code=400, content=str(e))
+        pairs = list(config.MANUAL_PAIRS)
+        if pair not in pairs and pair not in config.BASE_PAIRS:
+            pairs.append(pair)
+            _save_manual_pairs(conn, pairs)
+        return {"manual": list(config.MANUAL_PAIRS), "effective": list(config.PAIRS), "added": pair}
+    finally:
+        conn.close()
+
+
+@app.post("/api/pairs/remove")
+def api_pairs_remove(body: dict = Body(...)):
+    """Unpin a manual coin. A position still held stays sellable via the books."""
+    conn = db.connect()
+    try:
+        pair = str(body.get("pair", "")).strip().upper()
+        pairs = [p for p in config.MANUAL_PAIRS if p != pair]
+        _save_manual_pairs(conn, pairs)
+        return {"manual": list(config.MANUAL_PAIRS), "effective": list(config.PAIRS), "removed": pair}
+    finally:
+        conn.close()
+
+
 def _mask(value: str) -> str:
     if not value:
         return ""
@@ -609,6 +657,17 @@ deliberate environment change (<code>TRADING_ENABLED</code>), never a setting he
 </div>
 
 <div class="card">
+  <p class="eyebrow">Custom coins</p>
+  <p class="note">Pin any coin that trades against EUR on Kraken — it's always tradeable and, unlike the auto-tracked alts, is never force-sold by the sell floor. Type a symbol (e.g. <code>ADA</code>) or a full pair (<code>LINK/EUR</code>).</p>
+  <div class="row" style="align-items:stretch">
+    <input id="pair-add" placeholder="ADA" style="flex:1" onkeydown="if(event.key==='Enter')pairAdd()">
+    <button class="test" onclick="pairAdd()">Add coin</button>
+  </div>
+  <span class="result" id="r-pair"></span>
+  <div id="pair-list" style="display:flex;flex-wrap:wrap;gap:8px;margin-top:12px"></div>
+</div>
+
+<div class="card">
   <p class="eyebrow">Security</p>
   <label>Dashboard password</label><input id="DASHBOARD_PASSWORD" type="password" placeholder="">
   <p class="note">Set a password to require login for the dashboard and controls. Blank = keep current; clearing it (type a space then delete) leaves it unchanged — remove via the env to disable auth.</p>
@@ -664,6 +723,35 @@ async function load(){
     el.placeholder = s[k] && s[k].set ? (s[k].hint + " — set, blank to keep") : "not set";
   });
   tfaLoad();
+  pairsLoad();
+}
+async function pairsLoad(){
+  const s = await (await fetch('/api/pairs',{cache:'no-store'})).json();
+  const box = document.getElementById('pair-list'); box.innerHTML='';
+  (s.manual||[]).forEach(p => {
+    const c = document.createElement('span');
+    c.style.cssText='font-size:.9em;font-weight:700;padding:4px 6px 4px 11px;border-radius:9px;background:#1a2030;border:1px solid #2a3140;display:inline-flex;align-items:center;gap:8px';
+    c.innerHTML = p + ' <a href="#" title="remove" style="color:#8b93a7;text-decoration:none;font-weight:800">×</a>';
+    c.querySelector('a').onclick = (e)=>{ e.preventDefault(); pairRemove(p); };
+    box.appendChild(c);
+  });
+  if (!(s.manual||[]).length) box.innerHTML='<span class="note">No custom coins pinned.</span>';
+}
+async function pairAdd(){
+  const el = document.getElementById('r-pair'); const inp = document.getElementById('pair-add');
+  if (!inp.value.trim()) return;
+  el.className='result dim'; el.textContent='checking Kraken…';
+  const r = await fetch('/api/pairs/add',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({symbol:inp.value})});
+  if (r.ok){ const j=await r.json(); el.className='result up'; el.textContent='✓ added '+j.added; inp.value=''; pairsLoad(); }
+  else { el.className='result down'; el.textContent='✗ '+(await r.text()); }
+}
+async function pairRemove(pair){
+  const el = document.getElementById('r-pair'); el.className='result dim'; el.textContent='…';
+  const r = await fetch('/api/pairs/remove',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({pair})});
+  if (r.ok){ el.className='result up'; el.textContent='✓ removed '+pair; pairsLoad(); }
+  else { el.className='result down'; el.textContent='✗ '+(await r.text()); }
 }
 async function tfaLoad(){
   const s = await (await fetch('/api/2fa',{cache:'no-store'})).json();

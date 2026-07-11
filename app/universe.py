@@ -25,6 +25,30 @@ EXCLUDE = {
 }
 
 
+def resolve_pair(symbol: str) -> str:
+    """Normalise a user-typed coin to an EUR spot pair (e.g. 'ada' -> 'ADA/EUR')."""
+    s = (symbol or "").strip().upper().replace(" ", "")
+    if not s:
+        raise ValueError("enter a coin symbol")
+    if "/" not in s:
+        s = f"{s}/EUR"
+    if not s.endswith("/EUR"):
+        raise ValueError("Magpie trades in EUR — add an X/EUR pair")
+    return s
+
+
+def validate_tradeable(pair: str) -> None:
+    """Raise ValueError unless `pair` is an active spot market on Kraken."""
+    try:
+        markets = market.exchange().load_markets()
+    except Exception as e:  # noqa: BLE001 - can't verify -> don't silently accept
+        raise ValueError(f"couldn't reach Kraken to verify ({e})") from e
+    m = markets.get(pair)
+    if not (m and m.get("active") and m.get("spot")):
+        base = pair.split("/")[0]
+        raise ValueError(f"{base} isn't an active EUR spot pair on Kraken")
+
+
 def top_alt_pairs(n: int, http: httpx.Client | None = None) -> list[str]:
     """The top-n altcoin EUR pairs by market cap that exist on Kraken spot."""
     own = http is None
@@ -132,7 +156,8 @@ def refresh(conn, notify: bool = True, http: httpx.Client | None = None) -> dict
         return {"status": "error", "detail": "no tradeable alt pairs resolved"}
     buy_top = ranked[:config.DYNAMIC_TOP_N]  # the coins it may BUY
     floor_set = set(ranked)                  # ranks 1..floor_n — anything held here is kept
-    base = set(config.BASE_PAIRS)
+    # base + manually pinned coins are deliberate choices — never auto-sold
+    base = set(config.BASE_PAIRS) | set(config.MANUAL_PAIRS)
     held = _held_pairs(conn)
     # a held alt below the floor (and never a base pair) is force-sold now
     to_sell = [p for p in held if p not in floor_set and p not in base]
