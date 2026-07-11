@@ -217,6 +217,12 @@ def api_cycle():
     return engine.run_cycle()
 
 
+@app.post("/api/cycle/retry")
+def api_cycle_retry():
+    """Retry now every sleeve whose latest decision errored (off-schedule)."""
+    return engine.retry_now()
+
+
 @app.post("/api/digest")
 def api_digest():
     return engine.daily_digest()
@@ -477,6 +483,7 @@ def api_state():
         return {"mode": config.mode(), "version": __version__, "prices": prices, "overview": ov,
                 "ccy": config.symbol(), "ccy_code": config.BASE_CURRENCY,
                 "next_cycle": _next_cycle_iso(),
+                "retry_cycle_at": db.get_setting(conn, "retry_cycle_at") or None,
                 "halted": db.get_setting(conn, "halted") == "1",
                 "lessons": {"text": db.get_setting(conn, "lessons"),
                             "at": db.get_setting(conn, "lessons_at")},
@@ -593,11 +600,16 @@ async function load(){
     : '<tr><td class="dim">no closed trades yet</td></tr>';
   // a transient upstream failure (LLM overload etc.) never surfaces the raw
   // error (which can carry an API key) — it shows as a calm 'retrying' note.
+  // A short retry (minutes) is preferred over waiting for the next 6h slot.
+  const soon = s.retry_cycle_at ? new Date(s.retry_cycle_at) : null;
   const nc = s.next_cycle ? new Date(s.next_cycle) : null;
-  const retryMins = nc ? Math.max(0, Math.round((nc - Date.now()) / 60000)) : null;
-  const retryWhen = retryMins != null
-    ? `retrying at next decision · in ${Math.floor(retryMins / 60)}h ${retryMins % 60}m`
-    : 'retrying at next decision';
+  const when = soon ? soon : nc;
+  let retryWhen = 'retrying shortly';
+  if (when) {
+    const mins = Math.max(0, Math.round((when - Date.now()) / 60000));
+    const inTxt = mins < 60 ? `in ${mins} min` : `in ${Math.floor(mins / 60)}h ${mins % 60}m`;
+    retryWhen = soon ? `retrying ${inTxt}` : `retrying at next decision · ${inTxt}`;
+  }
   const FAIL = new Set(['error', 'invalid', 'no_key']);
   document.getElementById('log').innerHTML = '<tr><th>when</th><th>sleeve</th><th>what</th><th>why</th></tr>' +
     s.decisions.map(d => {

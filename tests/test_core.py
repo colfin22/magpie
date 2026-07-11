@@ -5,7 +5,7 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
-from app import advisor, config, db, market, portfolio, sleeves
+from app import advisor, config, db, engine, market, portfolio, sleeves
 
 TZ = ZoneInfo("Europe/Dublin")
 
@@ -238,3 +238,86 @@ def test_settings_overrides_apply_and_mask(monkeypatch):
         config.apply_overrides(conn)  # should swallow the cast error
     finally:
         conn.close(); os.unlink(p)
+
+
+# --- short retry of failed sleeves (#30 follow-up) -----------------------
+
+def test_error_schedules_a_short_retry(monkeypatch):
+    conn, p = make_db()
+    calls = []
+    monkeypatch.setattr(engine, "_schedule", lambda *a: calls.append(a))
+    try:
+        engine._maybe_schedule_retry(conn, [{"sleeve": "swing", "status": "error"}], attempt=1)
+        assert len(calls) == 1
+        assert calls[0][1] is engine._run_retry      # (delay, fn, *args)
+        assert calls[0][2] == ["swing"] and calls[0][3] == 1
+        assert db.get_setting(conn, "retry_cycle_at")  # a soon time is recorded
+    finally:
+        conn.close(); os.unlink(p)
+
+
+def test_no_retry_for_held_or_no_key(monkeypatch):
+    conn, p = make_db()
+    calls = []
+    monkeypatch.setattr(engine, "_schedule", lambda *a: calls.append(a))
+    try:
+        engine._maybe_schedule_retry(conn, [
+            {"sleeve": "swing", "status": "held"},
+            {"sleeve": "fortnight", "status": "no_key"}], attempt=1)
+        assert calls == []
+        assert not db.get_setting(conn, "retry_cycle_at")  # cleared
+    finally:
+        conn.close(); os.unlink(p)
+
+
+def test_retry_stops_after_max(monkeypatch):
+    conn, p = make_db()
+    calls = []
+    monkeypatch.setattr(engine, "_schedule", lambda *a: calls.append(a))
+    try:
+        engine._maybe_schedule_retry(conn, [{"sleeve": "swing", "status": "error"}],
+                                     attempt=engine.CYCLE_RETRY_MAX + 1)
+        assert calls == []
+    finally:
+        conn.close(); os.unlink(p)
+
+
+def test_retry_sleeves_bypasses_due(monkeypatch):
+    conn, p = make_db()
+    monkeypatch.setattr(engine, "_market_context", lambda c, s4h: ({}, [], {}))
+    ran = []
+    monkeypatch.setattr(engine, "run_sleeve",
+                        lambda c, m, s, pr, md, ex: (ran.append(s), {"sleeve": s, "status": "held"})[1])
+    try:
+        out = engine.retry_sleeves(conn, "paper", ["swing", "bogus"])
+        assert ran == ["swing"]                     # unknown sleeve filtered out
+        assert out == [{"sleeve": "swing", "status": "held"}]
+    finally:
+        conn.close(); os.unlink(p)
+
+
+def test_latest_failed_sleeves():
+    conn, p = make_db()
+    try:
+        engine._record(conn, "paper", "swing", "held", "old")
+        engine._record(conn, "paper", "swing", "error", "boom")   # swing's latest = error
+        engine._record(conn, "paper", "fortnight", "held", "fine")
+        assert engine._latest_failed_sleeves(conn, "paper") == ["swing"]
+    finally:
+        conn.close(); os.unlink(p)
+
+
+def test_retry_now_wires_failed_to_rerun(monkeypatch):
+    conn, p = make_db()
+    monkeypatch.setattr(db, "connect", lambda *a, **k: conn)
+    monkeypatch.setattr(config, "mode", lambda: "paper")
+    monkeypatch.setattr(engine, "_latest_failed_sleeves", lambda c, m: ["swing"])
+    monkeypatch.setattr(engine, "retry_sleeves",
+                        lambda c, m, names: [{"sleeve": n, "status": "held"} for n in names])
+    monkeypatch.setattr(engine, "_track_cycle_outcome", lambda *a, **k: None)
+    monkeypatch.setattr(engine, "_maybe_schedule_retry", lambda *a, **k: None)
+    try:
+        out = engine.retry_now()
+        assert out["status"] == "ok" and out["retried"] == ["swing"]
+    finally:
+        os.unlink(p)

@@ -1,11 +1,18 @@
 """One tick: detect top-ups -> run each due sleeve -> skim profits -> record."""
 import json
 import logging
-from datetime import datetime, timezone
+import os
+import threading
+from datetime import datetime, timedelta, timezone
 
 from . import advisor, config, db, ha, ledger, market, portfolio, sleeves
 
 LOGGER = logging.getLogger(__name__)
+
+# When a sleeve errors on a transient upstream failure, retry it again in a few
+# minutes rather than waiting for the next 6-hourly slot (up to MAX times).
+CYCLE_RETRY_MINS = int(os.getenv("CYCLE_RETRY_MINS", "10"))
+CYCLE_RETRY_MAX = int(os.getenv("CYCLE_RETRY_MAX", "3"))
 
 
 def _now() -> str:
@@ -118,14 +125,7 @@ def run_cycle(now=None) -> dict:
             LOGGER.warning("top-up detection failed: %s", e)
 
         due_now = [s for s in sleeves.ALL if sleeves.due(s, now)]
-        for pair in config.PAIRS:
-            market.refresh_candles(conn, pair)
-            if "swing" in due_now:
-                market.refresh_candles(conn, pair, timeframe="4h", limit=200)
-        prices = market.tickers(config.PAIRS)
-        market_data = [market.summary(conn, p) for p in config.PAIRS]
-        extras = {"fear_greed_index": market.fear_greed(),
-                  "orderbook_touch": {p: market.touch(p) for p in config.PAIRS}}
+        prices, market_data, extras = _market_context(conn, "swing" in due_now)
 
         results = [run_sleeve(conn, mode, s, prices, market_data, extras)
                    for s in due_now]
@@ -134,11 +134,111 @@ def run_cycle(now=None) -> dict:
         ledger.bench_init_if_needed(conn, mode, ov["total_eur"], prices)
         _track_cycle_outcome(conn, results, crashed=False)
         db.set_setting(conn, "last_cycle_at", _now())
+        _maybe_schedule_retry(conn, results, attempt=1)
         return {"status": "ok", "mode": mode, "topup": topup, "results": results,
                 "skims": skims, "total_eur": ov["total_eur"]}
     except Exception:
         _track_cycle_outcome(conn, [], crashed=True)
         raise
+    finally:
+        conn.close()
+
+
+def _market_context(conn, include_swing_4h: bool):
+    """Refresh candles and gather the price/market/extras pack a decision needs."""
+    for pair in config.PAIRS:
+        market.refresh_candles(conn, pair)
+        if include_swing_4h:
+            market.refresh_candles(conn, pair, timeframe="4h", limit=200)
+    prices = market.tickers(config.PAIRS)
+    market_data = [market.summary(conn, p) for p in config.PAIRS]
+    extras = {"fear_greed_index": market.fear_greed(),
+              "orderbook_touch": {p: market.touch(p) for p in config.PAIRS}}
+    return prices, market_data, extras
+
+
+def _failed_sleeves(results: list[dict]) -> list[str]:
+    """Sleeves that errored on a transient failure (worth a soon retry).
+
+    'no_key'/'invalid' won't fix themselves, so they don't schedule a retry."""
+    return [r["sleeve"] for r in results
+            if r.get("status") == "error" and r.get("sleeve")]
+
+
+def _schedule(delay_s: float, fn, *args) -> None:
+    t = threading.Timer(delay_s, fn, args=args)
+    t.daemon = True
+    t.start()
+
+
+def _maybe_schedule_retry(conn, results: list[dict], attempt: int) -> None:
+    """After a failed sleeve, queue a retry of just that sleeve in a few minutes
+    (up to CYCLE_RETRY_MAX) instead of waiting for the next scheduled cycle."""
+    failed = _failed_sleeves(results)
+    if not failed or attempt > CYCLE_RETRY_MAX:
+        db.set_setting(conn, "retry_cycle_at", "")
+        return
+    when = datetime.now(timezone.utc) + timedelta(minutes=CYCLE_RETRY_MINS)
+    db.set_setting(conn, "retry_cycle_at", when.isoformat(timespec="seconds"))
+    LOGGER.warning("scheduling short retry #%d of %s in %d min",
+                   attempt, failed, CYCLE_RETRY_MINS)
+    _schedule(CYCLE_RETRY_MINS * 60, _run_retry, failed, attempt)
+
+
+def _run_retry(sleeve_names: list[str], attempt: int) -> None:
+    """Background short-retry of specific sleeves; reschedules if still failing."""
+    conn = db.connect()
+    mode = config.mode()
+    try:
+        db.set_setting(conn, "retry_cycle_at", "")  # this attempt is firing now
+        if db.get_setting(conn, "halted") == "1":
+            return
+        results = retry_sleeves(conn, mode, sleeve_names)
+        db.set_setting(conn, "last_cycle_at", _now())
+        _track_cycle_outcome(conn, results, crashed=False)
+        _maybe_schedule_retry(conn, results, attempt + 1)
+    except Exception:  # noqa: BLE001 - a retry must never crash the process
+        LOGGER.exception("short retry of %s failed", sleeve_names)
+    finally:
+        conn.close()
+
+
+def retry_sleeves(conn, mode: str, sleeve_names: list[str]) -> list[dict]:
+    """Re-run specific sleeves off-schedule (bypasses the due() cadence gate)."""
+    names = [s for s in sleeve_names if s in sleeves.ALL]
+    if not names:
+        return []
+    prices, market_data, extras = _market_context(conn, "swing" in names)
+    return [run_sleeve(conn, mode, s, prices, market_data, extras) for s in names]
+
+
+def _latest_failed_sleeves(conn, mode: str) -> list[str]:
+    """Sleeves whose most recent decision errored (candidates to retry now)."""
+    out = []
+    for s in sleeves.ALL:
+        row = conn.execute(
+            "SELECT status FROM decisions WHERE mode=? AND sleeve=? ORDER BY id DESC LIMIT 1",
+            (mode, s)).fetchone()
+        if row and row["status"] == "error":
+            out.append(s)
+    return out
+
+
+def retry_now() -> dict:
+    """Retry every sleeve whose latest decision errored, immediately."""
+    conn = db.connect()
+    mode = config.mode()
+    try:
+        if db.get_setting(conn, "halted") == "1":
+            return {"status": "halted"}
+        failed = _latest_failed_sleeves(conn, mode)
+        if not failed:
+            return {"status": "nothing-to-retry"}
+        results = retry_sleeves(conn, mode, failed)
+        db.set_setting(conn, "last_cycle_at", _now())
+        _track_cycle_outcome(conn, results, crashed=False)
+        _maybe_schedule_retry(conn, results, attempt=1)
+        return {"status": "ok", "retried": failed, "results": results}
     finally:
         conn.close()
 

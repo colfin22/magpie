@@ -20,8 +20,8 @@ COOKIE = "magpie_auth"
 # Everything else — dashboard, portfolio state, settings (keys!), halt/resume —
 # is gated.
 PUBLIC_PATHS = {"/login", "/health", "/favicon.ico", "/favicon.svg",
-                "/api/cycle", "/api/digest", "/api/reconcile", "/api/review",
-                "/api/universe/refresh"}
+                "/api/cycle", "/api/cycle/retry", "/api/digest", "/api/reconcile",
+                "/api/review", "/api/universe/refresh"}
 
 
 def _server_secret(conn) -> str:
