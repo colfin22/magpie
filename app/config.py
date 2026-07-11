@@ -109,7 +109,18 @@ ERROR_ALERT_AFTER = int(os.environ.get("ERROR_ALERT_AFTER", "3"))    # consecuti
 HA_URL = os.environ.get("HA_URL", "").rstrip("/")
 HA_TOKEN = os.environ.get("HA_TOKEN", "")
 HA_NOTIFY_SERVICE = os.environ.get("HA_NOTIFY_SERVICE", "")
-HA_NOTIFY_CLICK_URL = os.environ.get("HA_NOTIFY_CLICK_URL", "")  # tap-to-open URL on the push (the dashboard)
+HA_NOTIFY_CLICK_URL = os.environ.get("HA_NOTIFY_CLICK_URL", "")  # tap-to-open URL, reused by every channel
+
+# extra notification channels — each fires only when its config is set; notify()
+# fans a message out to ALL of them. HA above is one of them.
+PUSHOVER_TOKEN = os.environ.get("PUSHOVER_TOKEN", "")       # pushover.net app token
+PUSHOVER_USER = os.environ.get("PUSHOVER_USER", "")         # pushover user/group key
+PUSHBULLET_TOKEN = os.environ.get("PUSHBULLET_TOKEN", "")   # pushbullet access token
+DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL", "")  # a channel webhook URL
+TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
+NTFY_TOPIC = os.environ.get("NTFY_TOPIC", "")              # ntfy topic name
+NTFY_SERVER = os.environ.get("NTFY_SERVER", "https://ntfy.sh")
 
 # login: set a password to gate the UI + control endpoints. Empty = no auth
 # (fine behind your own reverse-proxy auth). Localhost (the timers) is exempt.
@@ -132,6 +143,9 @@ EDITABLE = {
     "OPENROUTER_API_KEY": "str",
     "KRAKEN_API_KEY": "str", "KRAKEN_API_SECRET": "str",
     "HA_URL": "str", "HA_TOKEN": "str", "HA_NOTIFY_SERVICE": "str",
+    "PUSHOVER_TOKEN": "str", "PUSHOVER_USER": "str", "PUSHBULLET_TOKEN": "str",
+    "DISCORD_WEBHOOK_URL": "str", "TELEGRAM_BOT_TOKEN": "str", "TELEGRAM_CHAT_ID": "str",
+    "NTFY_TOPIC": "str", "NTFY_SERVER": "str",
     "PAIRS": "csv", "MANUAL_PAIRS": "csv", "SKIM_FRACTION": "float", "TIMEZONE": "str",
     "DYNAMIC_UNIVERSE_ENABLED": "bool", "DYNAMIC_TOP_N": "int",
     "DYNAMIC_SELL_FLOOR_N": "int",
@@ -141,6 +155,8 @@ SECRET_KEYS = {"GEMINI_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY",
                "PERPLEXITY_API_KEY", "GROK_API_KEY", "DEEPSEEK_API_KEY",
                "GITHUB_TOKEN", "OPENROUTER_API_KEY",
                "KRAKEN_API_KEY", "KRAKEN_API_SECRET", "HA_TOKEN",
+               "PUSHOVER_TOKEN", "PUSHOVER_USER", "PUSHBULLET_TOKEN",
+               "DISCORD_WEBHOOK_URL", "TELEGRAM_BOT_TOKEN",
                "DASHBOARD_PASSWORD"}
 
 

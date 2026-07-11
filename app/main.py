@@ -409,7 +409,8 @@ def api_settings_test(target: str):
                     "withdrawal_blocked": not can_withdraw}
         if target == "ha":
             ok = ha.notify("Magpie test", "Settings page test — notifications are working.")
-            return {"ok": ok, "detail": "check your phone" if ok else "HA not configured / unreachable"}
+            return {"ok": ok, "detail": "sent — check your channels" if ok
+                    else "no channel configured or reachable"}
         return Response(status_code=400, content="target must be brain|kraken|ha")
     except Exception as e:  # noqa: BLE001 - surface the failure to the page
         return {"ok": False, "detail": str(e)[:200]}
@@ -673,11 +674,20 @@ deliberate environment change (<code>TRADING_ENABLED</code>), never a setting he
 </div>
 
 <div class="card">
-  <p class="eyebrow">Notifications — Home Assistant (optional)</p>
-  <label>Base URL</label><input id="HA_URL" placeholder="http://homeassistant.local:8123">
-  <label>Long-lived token</label><input id="HA_TOKEN" placeholder="">
-  <label>Notify service</label><input id="HA_NOTIFY_SERVICE" placeholder="notify.mobile_app_myphone">
-  <div class="row"><button class="test" onclick="test('ha')">Send test push</button>
+  <p class="eyebrow">Notifications</p>
+  <p class="note">Fill in any channels you want — every alert (trades, top-ups, daily digest, errors, reviews) is sent to <b>all</b> configured channels. Leave the rest blank.</p>
+  <label>Home Assistant — base URL</label><input id="HA_URL" placeholder="http://homeassistant.local:8123">
+  <label>Home Assistant — long-lived token</label><input id="HA_TOKEN" placeholder="">
+  <label>Home Assistant — notify service</label><input id="HA_NOTIFY_SERVICE" placeholder="notify.mobile_app_myphone">
+  <label style="margin-top:1rem">Pushover — app token</label><input id="PUSHOVER_TOKEN" placeholder="">
+  <label>Pushover — user / group key</label><input id="PUSHOVER_USER" placeholder="">
+  <label style="margin-top:.6rem">Pushbullet — access token</label><input id="PUSHBULLET_TOKEN" placeholder="">
+  <label style="margin-top:.6rem">Discord — webhook URL</label><input id="DISCORD_WEBHOOK_URL" placeholder="https://discord.com/api/webhooks/…">
+  <label style="margin-top:.6rem">Telegram — bot token</label><input id="TELEGRAM_BOT_TOKEN" placeholder="">
+  <label>Telegram — chat ID</label><input id="TELEGRAM_CHAT_ID" placeholder="">
+  <label style="margin-top:.6rem">ntfy — topic</label><input id="NTFY_TOPIC" placeholder="my-magpie-alerts">
+  <label>ntfy — server</label><input id="NTFY_SERVER" placeholder="https://ntfy.sh">
+  <div class="row"><button class="test" onclick="test('ha')">Send test to all channels</button>
     <span class="result" id="r-ha"></span></div>
 </div>
 
@@ -767,8 +777,8 @@ deliberate environment change (<code>TRADING_ENABLED</code>), never a setting he
   <span style="flex:1"></span><button class="test" onclick="fetch('/logout',{method:'POST'}).then(()=>location='/login')">Log out</button></div>
 
 <script>
-const SECRETS = ["GEMINI_API_KEY","OPENAI_API_KEY","ANTHROPIC_API_KEY","PERPLEXITY_API_KEY","GROK_API_KEY","DEEPSEEK_API_KEY","GITHUB_TOKEN","OPENROUTER_API_KEY","KRAKEN_API_KEY","KRAKEN_API_SECRET","HA_TOKEN","DASHBOARD_PASSWORD"];
-const PLAIN = ["LLM_MODEL","LLM_MODEL_DEEP","GEMINI_MODEL","GEMINI_MODEL_DEEP","HA_URL","HA_NOTIFY_SERVICE","PAIRS","SKIM_FRACTION","DYNAMIC_TOP_N","DYNAMIC_SELL_FLOOR_N","TIMEZONE"];
+const SECRETS = ["GEMINI_API_KEY","OPENAI_API_KEY","ANTHROPIC_API_KEY","PERPLEXITY_API_KEY","GROK_API_KEY","DEEPSEEK_API_KEY","GITHUB_TOKEN","OPENROUTER_API_KEY","KRAKEN_API_KEY","KRAKEN_API_SECRET","HA_TOKEN","PUSHOVER_TOKEN","PUSHOVER_USER","PUSHBULLET_TOKEN","DISCORD_WEBHOOK_URL","TELEGRAM_BOT_TOKEN","DASHBOARD_PASSWORD"];
+const PLAIN = ["LLM_MODEL","LLM_MODEL_DEEP","GEMINI_MODEL","GEMINI_MODEL_DEEP","HA_URL","HA_NOTIFY_SERVICE","TELEGRAM_CHAT_ID","NTFY_TOPIC","NTFY_SERVER","PAIRS","SKIM_FRACTION","DYNAMIC_TOP_N","DYNAMIC_SELL_FLOOR_N","TIMEZONE"];
 async function load(){
   const s = await (await fetch('/api/settings',{cache:'no-store'})).json();
   document.getElementById('mode').textContent = '('+s.mode+')';

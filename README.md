@@ -193,8 +193,9 @@ Everything else is env vars — see [`.env.example`](.env.example). Notables:
 `LLM_MODEL` / `LLM_MODEL_DEEP` (optional model overrides), `PAIRS` (the base
 tradeable universe, default BTC/EUR + ETH/EUR), `SKIM_FRACTION` (profit share
 skimmed to the vault, default 0.5),
-`HA_URL`/`HA_TOKEN`/`HA_NOTIFY_SERVICE` (optional Home Assistant pushes for
-trades, top-ups and the daily digest).
+and the notification channels — **Home Assistant push, Pushover, Pushbullet,
+Discord, Telegram and ntfy**; set any you like and every alert (trades, top-ups,
+daily digest, errors, reviews) fans out to all of them.
 
 
 ## Dynamic universe (optional)
