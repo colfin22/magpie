@@ -118,11 +118,19 @@ that's not your temperament.
 
 ## Run
 
-**You need:** Docker, a [Kraken](https://kraken.com) account with a funded EUR
-balance, a trade-only API key (see above), and an API key for one supported LLM —
-**Gemini** is the default and its [free tier](https://aistudio.google.com/apikey)
-is plenty to start (the bot makes only a handful of calls a day). See
-[The brain](#the-brain--pick-your-llm) for the alternatives.
+**You need:** Docker, a **dedicated [Kraken](https://kraken.com) account that
+holds only the money you want Magpie to manage**, a trade-only API key (see
+above), and an API key for one supported LLM — **Gemini** is the default and its
+[free tier](https://aistudio.google.com/apikey) is plenty to start (the bot makes
+only a handful of calls a day). See [The brain](#the-brain--pick-your-llm) for the
+alternatives.
+
+> **⚠️ Use an empty Kraken account.** On its first live cycle Magpie treats the
+> *entire* balance of the account as its starting stake and splits it across the
+> sleeves, and its nightly reconciliation pulls any coin sitting on the account
+> into its own books. So fund a **fresh account with nothing else in it** — just
+> the stake you're giving Magpie. Don't point it at an account holding coins or
+> cash you don't want it trading.
 
 ```
 cp .env.example .env     # fill in your Kraken + LLM keys; leave TRADING_ENABLED=false
@@ -148,43 +156,67 @@ The cycle endpoint is safe to call at any hour — sleeve cadences are gated
 internally (fortnight only acts on the 06:00 call, quarter on Monday's, the
 vault on the 1st of the month).
 
-## Running on Windows
+## Running on Windows (no coding needed)
 
-Magpie is just a Docker container, so it runs on Windows exactly as it does on
-Linux — **no Python, no Linux box, no WSL tinkering** beyond what Docker Desktop
-sets up for you.
+You don't need to be technical or write any code. Magpie runs inside **Docker
+Desktop** — a free app that does the hard part for you. Here's the whole thing,
+step by step.
 
-1. Install **[Docker Desktop](https://www.docker.com/products/docker-desktop/)**
-   (it configures the WSL2 backend for you) and launch it.
-2. Get the code — `git clone https://github.com/colfin22/magpie.git`, or download
-   the ZIP from the green **Code** button and unzip it.
-3. In that folder, copy `.env.example` to `.env` and fill in your Kraken + LLM
-   keys. Leave `TRADING_ENABLED=false` to start in **paper mode**.
-4. Open **PowerShell** in the folder and run:
-   ```powershell
-   docker compose up -d --build
-   ```
-5. Open **http://localhost:8000** — that's your dashboard.
+### 1. Install Docker Desktop
+- Go to **[docker.com/products/docker-desktop](https://www.docker.com/products/docker-desktop/)** and click **Download for Windows**.
+- Run the file you downloaded, click through with the default options, and **restart your PC** if it asks you to.
+- Open **Docker Desktop** from the Start menu. The first launch takes a minute — wait until the whale icon near your clock stops animating and the app says **"Engine running"**. Leave it open.
 
-**Scheduling — the Windows stand-in for cron/systemd.** Windows has neither, so
-use **Task Scheduler**. Windows 10/11 ship `curl.exe`, so the heartbeat is the
-same HTTP calls as everywhere else. Register them once from an **Administrator**
-terminal:
+### 2. Download Magpie
+- Go to **[github.com/colfin22/magpie](https://github.com/colfin22/magpie)**.
+- Click the green **`<> Code`** button, then **Download ZIP**.
+- Find the ZIP in your **Downloads**, right-click it → **Extract All…** → **Extract**. You'll get a folder named `magpie-master`. Move it somewhere easy to find, like your **Documents**.
 
+### 3. Enter your keys
+- Open the `magpie-master` folder and find the file **`.env.example`**.
+- **Copy it** (click it, Ctrl+C, then Ctrl+V) and **rename the copy to exactly `.env`** — delete the `.example` part. *(If Windows won't let a name start with a dot, type `.env.` with a dot on the end and Windows removes it for you.)*
+- **Right-click `.env` → Open with → Notepad.** Fill in:
+  - your **Kraken** API key and secret (create it with *query + trade* only — **never** withdrawal),
+  - one **LLM** key — a free **[Gemini key](https://aistudio.google.com/apikey)** is the easiest start,
+  - your **`TIMEZONE`** (e.g. `America/New_York`),
+  - leave **`TRADING_ENABLED=false`** so it starts in safe **paper mode**.
+- **Save** and close Notepad.
+
+### 4. Start it
+- Open the `magpie-master` folder. Click the **address bar** at the top (where the folder path is), type **`powershell`**, and press **Enter** — a blue window opens, already pointed at the folder.
+- Type this line and press **Enter**:
+  ```
+  docker compose up -d --build
+  ```
+- The first run downloads and builds everything — give it a few minutes. It's finished when the blue window shows a fresh prompt again.
+
+### 5. Open the dashboard
+- In your web browser, go to **[http://localhost:8000](http://localhost:8000)**. That's Magpie.
+- It's in **paper mode** (pretend money), so you can watch it make decisions with zero risk before committing real money.
+
+### 6. Keep it deciding automatically
+Magpie only makes decisions when it's "poked" a few times a day. On Windows you set that up once with **Task Scheduler** (the built-in Windows scheduler):
+- Open the Start menu, type **PowerShell**, **right-click → Run as administrator**, and click **Yes**.
+- Paste these four lines (all at once is fine) and press **Enter**:
+  ```
+  schtasks /create /tn "Magpie cycle"     /sc daily /st 00:00 /ri 360 /du 24:00 /tr "curl.exe -X POST http://localhost:8000/api/cycle"
+  schtasks /create /tn "Magpie digest"    /sc daily /st 18:05 /tr "curl.exe -X POST http://localhost:8000/api/digest"
+  schtasks /create /tn "Magpie reconcile" /sc daily /st 05:45 /tr "curl.exe -X POST http://localhost:8000/api/reconcile"
+  schtasks /create /tn "Magpie review"    /sc monthly /d 1 /st 05:30 /tr "curl.exe -X POST http://localhost:8000/api/review"
+  ```
+- That pokes the bot every 6 hours (midnight, 6am, noon, 6pm) plus a daily summary and a monthly review. Because you set your `TIMEZONE` in step 3, these line up with your own clock.
+
+### Going live with real money
+When you're happy watching the paper-mode diary, open **`.env`** in Notepad, change `TRADING_ENABLED=false` to **`TRADING_ENABLED=true`**, save, then in the blue PowerShell window run:
 ```
-schtasks /create /tn "Magpie cycle"     /sc daily /st 00:00 /ri 360 /du 24:00 /tr "curl.exe -X POST http://localhost:8000/api/cycle"
-schtasks /create /tn "Magpie digest"    /sc daily /st 18:05 /tr "curl.exe -X POST http://localhost:8000/api/digest"
-schtasks /create /tn "Magpie reconcile" /sc daily /st 05:45 /tr "curl.exe -X POST http://localhost:8000/api/reconcile"
-schtasks /create /tn "Magpie review"    /sc monthly /d 1 /st 05:30 /tr "curl.exe -X POST http://localhost:8000/api/review"
+docker compose up -d --force-recreate
 ```
+From then on it trades the real balance in your (dedicated, empty) Kraken account. Remember the [empty-account warning](#run) above.
 
-The first task repeats the cycle every 6 hours (00:00 · 06:00 · 12:00 · 18:00).
-
-**Questions this usually saves:**
-- **Do I need Python or Linux?** No — only Docker Desktop.
-- **Docker Desktop must be running** for the container *and* the scheduled calls to reach it. Set it to start at login (Settings → General → *Start Docker Desktop when you sign in*).
-- **The times above are your PC's local clock**, but the slower sleeves' decision slots (the daily 06:00, Mondays, the 1st of the month) are evaluated on the bot's fixed **Europe/Dublin** clock. Running the cycle every 6 hours always covers the fast *swing* sleeve; shift the schedule if you want those slower slots to land at a particular local hour.
-- **It stays in paper mode** until you set `TRADING_ENABLED=true` and re-run `docker compose up -d --force-recreate` — that's deliberate, so you can watch the diary first.
+### If something isn't working
+- **Nothing loads / commands fail?** Make sure **Docker Desktop is open and shows "Engine running"** — Magpie can't run without it. To avoid this, set it to start automatically: Docker Desktop → **Settings → General → *Start Docker Desktop when you sign in***.
+- **`http://localhost:8000` won't open?** Wait a minute after step 4 and refresh — the first build takes a moment to finish.
+- **Do I need Python, Linux or WSL?** No. Docker Desktop sets up everything it needs behind the scenes.
 
 ## API
 
