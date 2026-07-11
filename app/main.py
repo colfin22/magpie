@@ -676,7 +676,7 @@ async function tfaLoad(){
   document.getElementById('tfa-remaining').textContent = s.backup_remaining ?? '–';
 }
 function showBackupCodes(codes){
-  document.getElementById('tfa-codes-list').textContent = (codes||[]).join('\n');
+  document.getElementById('tfa-codes-list').textContent = (codes||[]).join('\\n');
   document.getElementById('tfa-codes').hidden = false;
 }
 async function tfaRegen(){
