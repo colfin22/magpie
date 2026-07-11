@@ -626,6 +626,10 @@ def settings_page():
  button.test{background:transparent;color:#8b93a7}
  .result{font-size:.8rem;margin-left:.3rem}
  .note{font-size:.78rem;color:#5a6377;line-height:1.5}
+ .tabs{display:flex;gap:.4rem;flex-wrap:wrap;margin:.2rem 0 1rem;position:sticky;top:0;background:#12151c;padding:.45rem 0;z-index:2}
+ .tab-btn{background:#1a1f2b;color:#8b93a7;border:1px solid #262d3c;border-radius:999px;padding:.4rem .95rem;font-size:.82rem;font-weight:600;cursor:pointer}
+ .tab-btn.active{background:#4cd97b;color:#0a0d12;border-color:#4cd97b}
+ .card[hidden]{display:none}
 </style></head><body>
 <p style="margin:0 0 1rem"><a href="/" style="display:inline-block;background:#4cd97b;color:#0a0d12;
   font-weight:700;text-decoration:none;padding:.6rem 1.1rem;border-radius:9px;font-size:.95rem">←&nbsp; Back to dashboard</a></p>
@@ -634,7 +638,15 @@ def settings_page():
 shown masked. Leave a secret field blank to keep the current value. Going <b>live</b> stays a
 deliberate environment change (<code>TRADING_ENABLED</code>), never a setting here.</p>
 
-<div class="card">
+<div class="tabs">
+  <button type="button" class="tab-btn" data-tab="brain" onclick="setTab('brain')">Brain</button>
+  <button type="button" class="tab-btn" data-tab="exchange" onclick="setTab('exchange')">Exchange</button>
+  <button type="button" class="tab-btn" data-tab="trading" onclick="setTab('trading')">Trading</button>
+  <button type="button" class="tab-btn" data-tab="notify" onclick="setTab('notify')">Notifications</button>
+  <button type="button" class="tab-btn" data-tab="security" onclick="setTab('security')">Security</button>
+</div>
+
+<div class="card" data-tab="brain">
   <p class="eyebrow">The brain — LLM provider</p>
   <label>Provider (the active decision-maker)</label>
   <select id="LLM_PROVIDER">
@@ -664,7 +676,7 @@ deliberate environment change (<code>TRADING_ENABLED</code>), never a setting he
   <label>Gemini deep model — legacy override</label><input id="GEMINI_MODEL_DEEP">
 </div>
 
-<div class="card">
+<div class="card" data-tab="exchange">
   <p class="eyebrow">The exchange — Kraken</p>
   <p class="note">Create the key with <b>query + trade</b> permissions only — never withdrawal.</p>
   <label>API key</label><input id="KRAKEN_API_KEY" placeholder="">
@@ -673,7 +685,7 @@ deliberate environment change (<code>TRADING_ENABLED</code>), never a setting he
     <span class="result" id="r-kraken"></span></div>
 </div>
 
-<div class="card">
+<div class="card" data-tab="notify">
   <p class="eyebrow">Notifications</p>
   <p class="note">Fill in any channels you want — every alert (trades, top-ups, daily digest, errors, reviews) is sent to <b>all</b> configured channels. Leave the rest blank.</p>
   <label>Home Assistant — base URL</label><input id="HA_URL" placeholder="http://homeassistant.local:8123">
@@ -691,7 +703,7 @@ deliberate environment change (<code>TRADING_ENABLED</code>), never a setting he
     <span class="result" id="r-ha"></span></div>
 </div>
 
-<div class="card">
+<div class="card" data-tab="trading">
   <p class="eyebrow">Base currency</p>
   <div id="ccy-locked" hidden><p style="margin:.2rem 0">Trading and valuing everything in <b id="ccy-cur"></b>.</p><p class="note">Chosen at initial setup and <b>locked</b> — it can't be changed once the bot has traded (safe: your holdings and exchange balance are in this currency).</p></div>
   <div id="ccy-choose" hidden>
@@ -703,14 +715,14 @@ deliberate environment change (<code>TRADING_ENABLED</code>), never a setting he
   </div>
 </div>
 
-<div class="card">
+<div class="card" data-tab="trading">
   <p class="eyebrow">Location</p>
   <label>Timezone</label>
   <input id="TIMEZONE" placeholder="Europe/Dublin">
   <p class="note">Your IANA timezone — e.g. <code>America/New_York</code>, <code>Europe/London</code>, <code>Australia/Sydney</code>. Sets the clock the daily 06:00, Monday and 1st-of-month decision slots run on; match it to the schedule you set. Safe to change anytime.</p>
 </div>
 
-<div class="card">
+<div class="card" data-tab="trading">
   <p class="eyebrow">Strategy</p>
   <label>Base pairs — always tradeable (comma-separated)</label><input id="PAIRS" placeholder="BTC/EUR, ETH/EUR">
   <label>Profit skim to vault (0–1)</label><input id="SKIM_FRACTION">
@@ -723,7 +735,7 @@ deliberate environment change (<code>TRADING_ENABLED</code>), never a setting he
     <span class="result" id="r-universe"></span></div>
 </div>
 
-<div class="card">
+<div class="card" data-tab="trading">
   <p class="eyebrow">Custom coins</p>
   <p class="note">Pin any coin that trades against EUR on Kraken — it's always tradeable and, unlike the auto-tracked alts, is never force-sold by the sell floor. Type a symbol (e.g. <code>ADA</code>) or a full pair (<code>LINK/EUR</code>).</p>
   <div class="row" style="align-items:stretch">
@@ -734,7 +746,7 @@ deliberate environment change (<code>TRADING_ENABLED</code>), never a setting he
   <div id="pair-list" style="display:flex;flex-wrap:wrap;gap:8px;margin-top:12px"></div>
 </div>
 
-<div class="card">
+<div class="card" data-tab="security">
   <p class="eyebrow">Security</p>
   <label>Dashboard password</label><input id="DASHBOARD_PASSWORD" type="password" placeholder="">
   <p class="note">Set a password to require login for the dashboard and controls. Blank = keep current; clearing it (type a space then delete) leaves it unchanged — remove via the env to disable auth.</p>
@@ -779,6 +791,10 @@ deliberate environment change (<code>TRADING_ENABLED</code>), never a setting he
 <script>
 const SECRETS = ["GEMINI_API_KEY","OPENAI_API_KEY","ANTHROPIC_API_KEY","PERPLEXITY_API_KEY","GROK_API_KEY","DEEPSEEK_API_KEY","GITHUB_TOKEN","OPENROUTER_API_KEY","KRAKEN_API_KEY","KRAKEN_API_SECRET","HA_TOKEN","PUSHOVER_TOKEN","PUSHOVER_USER","PUSHBULLET_TOKEN","DISCORD_WEBHOOK_URL","TELEGRAM_BOT_TOKEN","DASHBOARD_PASSWORD"];
 const PLAIN = ["LLM_MODEL","LLM_MODEL_DEEP","GEMINI_MODEL","GEMINI_MODEL_DEEP","HA_URL","HA_NOTIFY_SERVICE","TELEGRAM_CHAT_ID","NTFY_TOPIC","NTFY_SERVER","PAIRS","SKIM_FRACTION","DYNAMIC_TOP_N","DYNAMIC_SELL_FLOOR_N","TIMEZONE"];
+function setTab(name){
+  document.querySelectorAll('.card[data-tab]').forEach(c => c.hidden = c.dataset.tab !== name);
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.toggle('active', b.dataset.tab === name));
+}
 async function load(){
   const s = await (await fetch('/api/settings',{cache:'no-store'})).json();
   document.getElementById('mode').textContent = '('+s.mode+')';
@@ -913,5 +929,6 @@ async function test(t){
   if (t==='kraken' && r.ok) msg += r.withdrawal_blocked ? ' · withdrawal blocked ✓' : ' · ⚠ KEY CAN WITHDRAW';
   el.textContent = msg;
 }
+setTab('brain');
 load();
 </script></body></html>"""
