@@ -218,6 +218,33 @@ From then on it trades the real balance in your (dedicated, empty) Kraken accoun
 - **`http://localhost:8000` won't open?** Wait a minute after step 4 and refresh — the first build takes a moment to finish.
 - **Do I need Python, Linux or WSL?** No. Docker Desktop sets up everything it needs behind the scenes.
 
+## Updating on Windows
+
+Good news: your keys (`.env`) and everything Magpie has learned and recorded (the
+**`data`** folder — trading history, settings, your 2FA) are **not** part of the
+download. So updating is just swapping in the newer code — your account and
+history carry straight over.
+
+1. Have a look at the **[latest release](https://github.com/colfin22/magpie/releases)** to see what's new.
+2. Download the new **ZIP** the same way as before — the green **`<> Code`** button → **Download ZIP** — then right-click it → **Extract All…**.
+3. Open the **freshly extracted** `magpie-master` folder, press **Ctrl+A** (select everything), then **Ctrl+C** (copy).
+4. Go to your **existing** Magpie folder, press **Ctrl+V** (paste). When Windows asks, choose **"Replace the files in the destination."**
+   *This overwrites the old code with the new version. It does **not** touch your `.env` or your `data` folder — the download doesn't contain either of them.*
+5. Open **PowerShell** in the folder (type `powershell` in the address bar) and run:
+   ```
+   docker compose up -d --build
+   ```
+6. When it finishes, open **[http://localhost:8000](http://localhost:8000)** and press **Ctrl+Shift+R** — that forces your browser to load the new dashboard instead of a saved old one.
+
+That's it. Your holdings, diary, settings and 2FA are all intact, and your
+scheduled tasks from setup keep working unchanged.
+
+> **⚠️ Never delete the `data` folder.** It *is* your database — trading history,
+> settings and your 2FA secret. Deleting it resets Magpie to a blank install.
+
+**Prefer the command line?** If you installed with `git clone`, updating is just
+`git pull` in the folder followed by `docker compose up -d --build`.
+
 ## API
 
 - `GET /health` — liveness, mode, halt state, last decision
