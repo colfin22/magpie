@@ -1,5 +1,6 @@
 # 🐦‍⬛ Magpie
 
+[![Version](https://img.shields.io/github/v/release/colfin22/magpie?label=version&color=blue)](https://github.com/colfin22/magpie/releases)
 [![CI](https://github.com/colfin22/magpie/actions/workflows/ci.yml/badge.svg)](https://github.com/colfin22/magpie/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
