@@ -102,7 +102,8 @@ def health():
         return {
             "ok": True, "version": __version__, "mode": config.mode(),
             "halted": db.get_setting(conn, "halted") == "1",
-            "gemini_configured": bool(config.GEMINI_API_KEY),
+            "llm_provider": advisor.active_provider(),
+            "brain_configured": advisor.brain_configured(),
             "last_cycle_at": last_cycle,
             "stale": stale,                    # no cycle within STALE_AFTER_S (#1)
             "consecutive_failures": failures,  # cycles failing in a row (#2)
@@ -211,9 +212,10 @@ def api_settings_set(body: dict = Body(...)):
 def api_settings_test(target: str):
     """Probe a configured integration and report a human-readable result."""
     try:
-        if target == "gemini":
+        if target in ("brain", "gemini"):
             raw = advisor.ask('Reply with exactly {"ok": true}')
-            return {"ok": '"ok"' in raw or "ok" in raw.lower(), "detail": raw[:120]}
+            return {"ok": '"ok"' in raw or "ok" in raw.lower(),
+                    "detail": f"[{advisor.active_provider()}] " + raw[:110]}
         if target == "kraken":
             bal = market.exchange().fetch_balance()
             eur = (bal.get("total") or {}).get("EUR")
@@ -228,7 +230,7 @@ def api_settings_test(target: str):
         if target == "ha":
             ok = ha.notify("Magpie test", "Settings page test — notifications are working.")
             return {"ok": ok, "detail": "check your phone" if ok else "HA not configured / unreachable"}
-        return Response(status_code=400, content="target must be gemini|kraken|ha")
+        return Response(status_code=400, content="target must be brain|kraken|ha")
     except Exception as e:  # noqa: BLE001 - surface the failure to the page
         return {"ok": False, "detail": str(e)[:200]}
 
@@ -449,12 +451,33 @@ shown masked. Leave a secret field blank to keep the current value. Going <b>liv
 deliberate environment change (<code>TRADING_ENABLED</code>), never a setting here.</p>
 
 <div class="card">
-  <p class="eyebrow">The brain — Gemini</p>
-  <label>API key</label><input id="GEMINI_API_KEY" placeholder="">
-  <label>Model (frequent decisions)</label><input id="GEMINI_MODEL">
-  <label>Deep model (slow sleeves + review)</label><input id="GEMINI_MODEL_DEEP">
-  <div class="row"><button class="test" onclick="test('gemini')">Test Gemini</button>
-    <span class="result" id="r-gemini"></span></div>
+  <p class="eyebrow">The brain — LLM provider</p>
+  <label>Provider (the active decision-maker)</label>
+  <select id="LLM_PROVIDER">
+    <option value="gemini">Gemini (Google)</option>
+    <option value="openai">OpenAI (ChatGPT)</option>
+    <option value="anthropic">Anthropic (Claude)</option>
+    <option value="perplexity">Perplexity</option>
+    <option value="grok">Grok (xAI)</option>
+    <option value="deepseek">DeepSeek</option>
+    <option value="github">GitHub Models (Copilot)</option>
+    <option value="openrouter">OpenRouter (catch-all)</option>
+  </select>
+  <label>Model override — frequent decisions <span class="note">(blank = provider default)</span></label><input id="LLM_MODEL" placeholder="blank = default">
+  <label>Model override — deep (slow sleeves + review)</label><input id="LLM_MODEL_DEEP" placeholder="blank = default">
+  <div class="row"><button class="test" onclick="test('brain')">Test active brain</button>
+    <span class="result" id="r-brain"></span></div>
+  <p class="note" style="margin-top:1rem">Each provider uses its own key below — set the one for your chosen provider. A paid ChatGPT/Perplexity/Copilot <em>subscription</em> is not an API key; get a developer key from the provider's platform.</p>
+  <label>Gemini API key</label><input id="GEMINI_API_KEY" placeholder="">
+  <label>OpenAI API key</label><input id="OPENAI_API_KEY" placeholder="">
+  <label>Anthropic (Claude) API key</label><input id="ANTHROPIC_API_KEY" placeholder="">
+  <label>Perplexity API key</label><input id="PERPLEXITY_API_KEY" placeholder="">
+  <label>Grok (xAI) API key</label><input id="GROK_API_KEY" placeholder="">
+  <label>DeepSeek API key</label><input id="DEEPSEEK_API_KEY" placeholder="">
+  <label>GitHub token (GitHub Models)</label><input id="GITHUB_TOKEN" placeholder="">
+  <label>OpenRouter API key</label><input id="OPENROUTER_API_KEY" placeholder="">
+  <label style="margin-top:.8rem">Gemini model (frequent) — legacy override</label><input id="GEMINI_MODEL">
+  <label>Gemini deep model — legacy override</label><input id="GEMINI_MODEL_DEEP">
 </div>
 
 <div class="card">
@@ -499,12 +522,13 @@ deliberate environment change (<code>TRADING_ENABLED</code>), never a setting he
   <span style="flex:1"></span><button class="test" onclick="fetch('/logout',{method:'POST'}).then(()=>location='/login')">Log out</button></div>
 
 <script>
-const SECRETS = ["GEMINI_API_KEY","KRAKEN_API_KEY","KRAKEN_API_SECRET","HA_TOKEN","DASHBOARD_PASSWORD"];
-const PLAIN = ["GEMINI_MODEL","GEMINI_MODEL_DEEP","HA_URL","HA_NOTIFY_SERVICE","PAIRS","SKIM_FRACTION","DYNAMIC_TOP_N","DYNAMIC_SELL_FLOOR_N"];
+const SECRETS = ["GEMINI_API_KEY","OPENAI_API_KEY","ANTHROPIC_API_KEY","PERPLEXITY_API_KEY","GROK_API_KEY","DEEPSEEK_API_KEY","GITHUB_TOKEN","OPENROUTER_API_KEY","KRAKEN_API_KEY","KRAKEN_API_SECRET","HA_TOKEN","DASHBOARD_PASSWORD"];
+const PLAIN = ["LLM_MODEL","LLM_MODEL_DEEP","GEMINI_MODEL","GEMINI_MODEL_DEEP","HA_URL","HA_NOTIFY_SERVICE","PAIRS","SKIM_FRACTION","DYNAMIC_TOP_N","DYNAMIC_SELL_FLOOR_N"];
 async function load(){
   const s = await (await fetch('/api/settings',{cache:'no-store'})).json();
   document.getElementById('mode').textContent = '('+s.mode+')';
   PLAIN.forEach(k => { if (s[k] !== undefined) document.getElementById(k).value = s[k]; });
+  if (s.LLM_PROVIDER) document.getElementById('LLM_PROVIDER').value = s.LLM_PROVIDER;
   document.getElementById('DYNAMIC_UNIVERSE_ENABLED').checked = !!s.DYNAMIC_UNIVERSE_ENABLED;
   SECRETS.forEach(k => {
     const el = document.getElementById(k);
@@ -520,6 +544,7 @@ async function refreshUniverse(){
 async function save(){
   const body = {};
   PLAIN.forEach(k => body[k] = document.getElementById(k).value);
+  body.LLM_PROVIDER = document.getElementById('LLM_PROVIDER').value;
   body.DYNAMIC_UNIVERSE_ENABLED = document.getElementById('DYNAMIC_UNIVERSE_ENABLED').checked;
   SECRETS.forEach(k => { const v = document.getElementById(k).value.trim(); if (v) body[k] = v; });
   const r = await fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},

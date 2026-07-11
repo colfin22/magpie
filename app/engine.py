@@ -47,8 +47,7 @@ def run_sleeve(conn, mode: str, sleeve: str, prices: dict, market_data: list[dic
         lessons=db.get_setting(conn, "lessons", "") or "",
         extras=extras)
     try:
-        raw = advisor.ask(prompt, model=config.GEMINI_MODEL_DEEP
-                          if sleeve in DEEP_SLEEVES else None)
+        raw = advisor.ask(prompt, deep=sleeve in DEEP_SLEEVES)
     except advisor.AdvisorError as e:
         status = "no_key" if "no GEMINI_API_KEY" in str(e) else "error"
         _record(conn, mode, sleeve, status, str(e), prompt=prompt)
@@ -225,7 +224,7 @@ def self_review() -> dict:
             orders=json.dumps({"orders": orders, **orders_extra}, indent=1)[:12000],
             equity=json.dumps(equity, indent=1)[:4000])
         try:
-            note = advisor.ask(prompt, model=config.GEMINI_MODEL_DEEP).strip()[:1500]
+            note = advisor.ask(prompt, deep=True).strip()[:1500]
         except advisor.AdvisorError as e:
             return {"status": "error", "detail": str(e)}
         db.set_setting(conn, "lessons", note)

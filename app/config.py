@@ -2,11 +2,28 @@ import os
 
 DB_PATH = os.environ.get("MAGPIE_DB", "/data/magpie.db")
 
-# the brain
+# the brain — pluggable LLM provider. The prompt + JSON-validation layer are
+# provider-agnostic; only advisor.ask() branches on this. Each provider uses its
+# OWN api key below; empty model overrides fall back to the provider's defaults.
+LLM_PROVIDER = os.environ.get("LLM_PROVIDER", "gemini").lower()
+VALID_PROVIDERS = ("gemini", "openai", "anthropic", "perplexity",
+                   "grok", "deepseek", "github", "openrouter")
+LLM_MODEL = os.environ.get("LLM_MODEL", "")            # blank = provider default (frequent)
+LLM_MODEL_DEEP = os.environ.get("LLM_MODEL_DEEP", "")  # blank = provider default (slow sleeves + review)
+
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
 # the slow sleeves (quarter, vault) and the monthly self-review think harder
 GEMINI_MODEL_DEEP = os.environ.get("GEMINI_MODEL_DEEP", "gemini-2.5-pro")
+
+# alternative brains — one key each; the active one is chosen by LLM_PROVIDER
+OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")          # ChatGPT (platform.openai.com)
+ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")    # Claude (api.anthropic.com)
+PERPLEXITY_API_KEY = os.environ.get("PERPLEXITY_API_KEY", "")  # Perplexity (api.perplexity.ai)
+GROK_API_KEY = os.environ.get("GROK_API_KEY", "")              # xAI Grok (api.x.ai)
+DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY", "")      # DeepSeek (api.deepseek.com)
+GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "")              # GitHub Models / Copilot (models.github.ai)
+OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY", "")  # catch-all router (openrouter.ai)
 
 # the exchange (live mode only — paper mode uses public market data)
 KRAKEN_API_KEY = os.environ.get("KRAKEN_API_KEY", "")
@@ -55,7 +72,11 @@ def mode() -> str:
 # name -> caster ('str' | 'float' | 'csv'). TRADING_ENABLED is deliberately NOT
 # here: going live stays an explicit env decision, never a stray web toggle.
 EDITABLE = {
+    "LLM_PROVIDER": "str", "LLM_MODEL": "str", "LLM_MODEL_DEEP": "str",
     "GEMINI_API_KEY": "str", "GEMINI_MODEL": "str", "GEMINI_MODEL_DEEP": "str",
+    "OPENAI_API_KEY": "str", "ANTHROPIC_API_KEY": "str", "PERPLEXITY_API_KEY": "str",
+    "GROK_API_KEY": "str", "DEEPSEEK_API_KEY": "str", "GITHUB_TOKEN": "str",
+    "OPENROUTER_API_KEY": "str",
     "KRAKEN_API_KEY": "str", "KRAKEN_API_SECRET": "str",
     "HA_URL": "str", "HA_TOKEN": "str", "HA_NOTIFY_SERVICE": "str",
     "PAIRS": "csv", "SKIM_FRACTION": "float",
@@ -63,7 +84,10 @@ EDITABLE = {
     "DYNAMIC_SELL_FLOOR_N": "int",
     "DASHBOARD_USER": "str", "DASHBOARD_PASSWORD": "str",
 }
-SECRET_KEYS = {"GEMINI_API_KEY", "KRAKEN_API_KEY", "KRAKEN_API_SECRET", "HA_TOKEN",
+SECRET_KEYS = {"GEMINI_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY",
+               "PERPLEXITY_API_KEY", "GROK_API_KEY", "DEEPSEEK_API_KEY",
+               "GITHUB_TOKEN", "OPENROUTER_API_KEY",
+               "KRAKEN_API_KEY", "KRAKEN_API_SECRET", "HA_TOKEN",
                "DASHBOARD_PASSWORD"}
 
 
@@ -77,6 +101,11 @@ def _cast(key: str, raw: str):
         return int(raw)
     if t == "bool":
         return str(raw).strip().lower() in ("true", "1", "yes", "on")
+    if key == "LLM_PROVIDER":
+        p = raw.strip().lower()
+        if p and p not in VALID_PROVIDERS:
+            raise ValueError(f"unknown provider {p!r} (pick one of {', '.join(VALID_PROVIDERS)})")
+        return p or "gemini"
     return raw.rstrip("/") if key == "HA_URL" else raw
 
 
