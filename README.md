@@ -191,12 +191,29 @@ anytime; align it with the schedule you set below.
 Everything else is env vars — see [`.env.example`](.env.example). Notables:
 `LLM_PROVIDER` (which brain; default `gemini`) and its matching API key,
 `LLM_MODEL` / `LLM_MODEL_DEEP` (optional model overrides), `PAIRS` (the base
-tradeable universe, default BTC/EUR + ETH/EUR), `SKIM_FRACTION` (profit share
-skimmed to the vault, default 0.5),
-and the notification channels — **Home Assistant push, Pushover, Pushbullet,
-Discord, Telegram and ntfy**; set any you like and every alert (trades, top-ups,
-daily digest, errors, reviews) fans out to all of them.
+tradeable universe, default BTC/EUR + ETH/EUR), and `SKIM_FRACTION` (profit share
+skimmed to the vault, default 0.5).
 
+## Notifications
+
+Magpie can push every event — trades, top-ups, the daily digest, error alerts and
+the monthly self-review — to as many channels as you like. Set the ones you want
+(in `.env` or on the settings page); each fires only when its keys are present, and
+every alert **fans out to all configured channels at once**:
+
+| Channel | Config |
+|---|---|
+| **Home Assistant** push | `HA_URL` + `HA_TOKEN` + `HA_NOTIFY_SERVICE` |
+| **Pushover** | `PUSHOVER_TOKEN` + `PUSHOVER_USER` |
+| **Pushbullet** | `PUSHBULLET_TOKEN` |
+| **Discord** (rich embed) | `DISCORD_WEBHOOK_URL` |
+| **Telegram** | `TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHAT_ID` |
+| **ntfy** | `NTFY_TOPIC` (+ `NTFY_SERVER`, default `ntfy.sh`) |
+
+`HA_NOTIFY_CLICK_URL` (e.g. your dashboard URL) becomes the tap-to-open link on
+every channel that supports it, and the settings page's **Test** button sends a
+test to all configured channels at once. Configure nothing and Magpie just runs
+quietly — one channel failing never blocks the others.
 
 ## Dynamic universe (optional)
 
