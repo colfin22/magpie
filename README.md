@@ -148,6 +148,44 @@ The cycle endpoint is safe to call at any hour — sleeve cadences are gated
 internally (fortnight only acts on the 06:00 call, quarter on Monday's, the
 vault on the 1st of the month).
 
+## Running on Windows
+
+Magpie is just a Docker container, so it runs on Windows exactly as it does on
+Linux — **no Python, no Linux box, no WSL tinkering** beyond what Docker Desktop
+sets up for you.
+
+1. Install **[Docker Desktop](https://www.docker.com/products/docker-desktop/)**
+   (it configures the WSL2 backend for you) and launch it.
+2. Get the code — `git clone https://github.com/colfin22/magpie.git`, or download
+   the ZIP from the green **Code** button and unzip it.
+3. In that folder, copy `.env.example` to `.env` and fill in your Kraken + LLM
+   keys. Leave `TRADING_ENABLED=false` to start in **paper mode**.
+4. Open **PowerShell** in the folder and run:
+   ```powershell
+   docker compose up -d --build
+   ```
+5. Open **http://localhost:8000** — that's your dashboard.
+
+**Scheduling — the Windows stand-in for cron/systemd.** Windows has neither, so
+use **Task Scheduler**. Windows 10/11 ship `curl.exe`, so the heartbeat is the
+same HTTP calls as everywhere else. Register them once from an **Administrator**
+terminal:
+
+```
+schtasks /create /tn "Magpie cycle"     /sc daily /st 00:00 /ri 360 /du 24:00 /tr "curl.exe -X POST http://localhost:8000/api/cycle"
+schtasks /create /tn "Magpie digest"    /sc daily /st 18:05 /tr "curl.exe -X POST http://localhost:8000/api/digest"
+schtasks /create /tn "Magpie reconcile" /sc daily /st 05:45 /tr "curl.exe -X POST http://localhost:8000/api/reconcile"
+schtasks /create /tn "Magpie review"    /sc monthly /d 1 /st 05:30 /tr "curl.exe -X POST http://localhost:8000/api/review"
+```
+
+The first task repeats the cycle every 6 hours (00:00 · 06:00 · 12:00 · 18:00).
+
+**Questions this usually saves:**
+- **Do I need Python or Linux?** No — only Docker Desktop.
+- **Docker Desktop must be running** for the container *and* the scheduled calls to reach it. Set it to start at login (Settings → General → *Start Docker Desktop when you sign in*).
+- **The times above are your PC's local clock**, but the slower sleeves' decision slots (the daily 06:00, Mondays, the 1st of the month) are evaluated on the bot's fixed **Europe/Dublin** clock. Running the cycle every 6 hours always covers the fast *swing* sleeve; shift the schedule if you want those slower slots to land at a particular local hour.
+- **It stays in paper mode** until you set `TRADING_ENABLED=true` and re-run `docker compose up -d --force-recreate` — that's deliberate, so you can watch the diary first.
+
 ## API
 
 - `GET /health` — liveness, mode, halt state, last decision
