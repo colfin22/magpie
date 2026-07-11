@@ -4,9 +4,9 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
 An autonomous, self-hosted crypto trading bot with an LLM for a brain. You give it
-a small stake on Kraken and a Gemini API key; it manages the money on its own
-schedule, keeps a full written diary of every thought, and pushes you a daily
-digest. Your only control is the halt button — by design.
+a small stake on Kraken and an API key for the LLM of your choice; it manages the
+money on its own schedule, keeps a full written diary of every thought, and pushes
+you a daily digest. Your only control is the halt button — by design.
 
 > **⚠️ This is an experiment, not a product.** An LLM has no proven trading edge.
 > Magpie is built for people who want to *watch an AI manage a toy stake* with
@@ -33,7 +33,7 @@ mandate, and its own decision cadence:
 
 Each decision cycle, the engine builds a context pack — that sleeve's holdings,
 market data with computed indicators (EMA 20/50/200, RSI, multi-horizon returns),
-its own recent decision history, and a fee reminder — and asks Gemini for a
+its own recent decision history, and a fee reminder — and asks its LLM for a
 strict-JSON decision: buy / sell / hold, pair, fraction, confidence, reasoning.
 
 **The validation layer is the real boundary**: only whitelisted pairs, spot only,
@@ -70,6 +70,32 @@ exchange balances.
 the surplus at its next cycle, splits it equally across the three active sleeves,
 and raises their high-water marks so fresh cash is never mistaken for profit.
 
+## The brain — pick your LLM
+
+Magpie isn't wed to one model. `LLM_PROVIDER` chooses who makes the call:
+
+| Provider | `LLM_PROVIDER` | API key from |
+|---|---|---|
+| **Gemini** (Google) — default | `gemini` | [aistudio.google.com](https://aistudio.google.com/apikey) |
+| **OpenAI** (ChatGPT) | `openai` | platform.openai.com |
+| **Anthropic** (Claude) | `anthropic` | console.anthropic.com |
+| **Perplexity** | `perplexity` | perplexity.ai → API |
+| **Grok** (xAI) | `grok` | x.ai |
+| **DeepSeek** | `deepseek` | platform.deepseek.com |
+| **GitHub Models** (Copilot) | `github` | github.com personal access token |
+| **OpenRouter** — one key, any model above and more | `openrouter` | openrouter.ai |
+
+Each provider uses its own key — set the one for the brain you pick. The prompt
+and the strict-JSON safety layer are identical whichever model answers, so a
+model that formats badly simply resolves to HOLD. `LLM_MODEL` / `LLM_MODEL_DEEP`
+override the per-provider default models (the deep one runs the slow sleeves and
+the monthly self-review; the fast one runs the rest). Switch live from the
+settings page — dropdown, key, **Test active brain**, save; no restart.
+
+> A paid ChatGPT / Perplexity / Copilot **subscription is not an API key** —
+> each needs a developer key from the provider's platform, billed per token.
+> Gemini's free tier is enough to run Magpie outright.
+
 ## Safety rails (the non-negotiables)
 
 - **The API key cannot withdraw.** Create it with query + trade permissions only.
@@ -92,12 +118,13 @@ that's not your temperament.
 ## Run
 
 **You need:** Docker, a [Kraken](https://kraken.com) account with a funded EUR
-balance, a trade-only API key (see above), and a
-[Gemini API key](https://aistudio.google.com/apikey) (free tier is plenty —
-the bot makes a handful of calls a day).
+balance, a trade-only API key (see above), and an API key for one supported LLM —
+**Gemini** is the default and its [free tier](https://aistudio.google.com/apikey)
+is plenty to start (the bot makes only a handful of calls a day). See
+[The brain](#the-brain--pick-your-llm) for the alternatives.
 
 ```
-cp .env.example .env     # fill in the two keys; leave TRADING_ENABLED=false
+cp .env.example .env     # fill in your Kraken + LLM keys; leave TRADING_ENABLED=false
 docker compose up -d --build
 ```
 
@@ -135,8 +162,10 @@ vault on the 1st of the month).
 ## Configuration
 
 Everything is env vars — see [`.env.example`](.env.example). Notables:
-`PAIRS` (the tradeable universe, default BTC/EUR + ETH/EUR), `SKIM_FRACTION`
-(profit share skimmed to the vault, default 0.5), `GEMINI_MODEL`,
+`LLM_PROVIDER` (which brain; default `gemini`) and its matching API key,
+`LLM_MODEL` / `LLM_MODEL_DEEP` (optional model overrides), `PAIRS` (the base
+tradeable universe, default BTC/EUR + ETH/EUR), `SKIM_FRACTION` (profit share
+skimmed to the vault, default 0.5),
 `HA_URL`/`HA_TOKEN`/`HA_NOTIFY_SERVICE` (optional Home Assistant pushes for
 trades, top-ups and the daily digest).
 
@@ -146,9 +175,15 @@ trades, top-ups and the daily digest).
 With `DYNAMIC_UNIVERSE=true`, the tradeable set is your base pairs plus the
 top-`DYNAMIC_TOP_N` (default 5) altcoins by market cap that trade against EUR
 on Kraken — stablecoins and wrapped/staked tokens excluded. It refreshes on a
-weekly timer (`POST /api/universe/refresh`), pushes a heads-up when the set
-changes, and never strands a position: a coin that falls out of the top-N but
-is still held stays sellable until closed. `GET /api/universe` shows it.
+weekly timer (`POST /api/universe/refresh`) and pushes a heads-up when the set
+changes.
+
+It never strands a position, and never churns fees on a ranking reshuffle: a
+held coin that slips out of the top-`DYNAMIC_TOP_N` stays sellable at the bot's
+own discretion, and only once it falls past `DYNAMIC_SELL_FLOOR_N` (default 10)
+is it force-sold at the weekly refresh — the band between the two is a grace
+zone the model manages itself. Base pairs are never auto-sold, and sub-€1 dust
+is left in place. `GET /api/universe` shows the current set.
 
 
 ## Login (optional)
