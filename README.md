@@ -162,6 +162,15 @@ You don't need to be technical or write any code. Magpie runs inside **Docker
 Desktop** — a free app that does the hard part for you. Here's the whole thing,
 step by step.
 
+> **🖥️ Magpie needs to stay running.** It only makes decisions when the machine
+> is switched on, Docker Desktop is running, and the scheduled tasks can fire. So
+> install it on a computer that's on all (or most) of the time — an always-on
+> desktop, a mini-PC or a home server is ideal; a laptop that sleeps or gets shut
+> down will simply skip decisions until it's back on (no harm, but it can't trade
+> while it's off). On whatever machine you pick, set Windows to **never sleep**
+> (Settings → System → Power → Screen and sleep) and set **Docker Desktop to start
+> when you sign in** (Docker Desktop → Settings → General).
+
 ### 1. Install Docker Desktop
 - Go to **[docker.com/products/docker-desktop](https://www.docker.com/products/docker-desktop/)** and click **Download for Windows**.
 - Run the file you downloaded, click through with the default options, and **restart your PC** if it asks you to.
@@ -244,6 +253,47 @@ scheduled tasks from setup keep working unchanged.
 
 **Prefer the command line?** If you installed with `git clone`, updating is just
 `git pull` in the folder followed by `docker compose up -d --build`.
+
+## Uninstalling or starting fresh (Windows)
+
+**Just pause it for a while** (keeps everything, easy to resume) — in **PowerShell**
+in the Magpie folder:
+```
+docker compose stop      # later, bring it back with:  docker compose start
+```
+
+**Remove Magpie completely:**
+1. In PowerShell in the folder, stop and delete the app and its image:
+   ```
+   docker compose down --rmi all
+   ```
+2. Delete the whole **Magpie folder** (the code, your `.env`, and the `data` database).
+3. Remove the scheduled pokes — in **PowerShell as Administrator**:
+   ```
+   schtasks /delete /tn "Magpie cycle" /f
+   schtasks /delete /tn "Magpie digest" /f
+   schtasks /delete /tn "Magpie reconcile" /f
+   schtasks /delete /tn "Magpie review" /f
+   ```
+4. If you don't use Docker for anything else, uninstall **Docker Desktop** too: Windows **Settings → Apps → Installed apps → Docker Desktop → Uninstall**.
+
+> **💰 Your money is safe and separate.** Uninstalling Magpie does **nothing** to
+> your Kraken account — your balance stays on Kraken exactly where it is. To get
+> your funds back, sell or withdraw on **Kraken** directly. And once Magpie is
+> gone, **delete its API key** in your Kraken account settings so nothing can use
+> it again.
+
+**Start fresh but keep using Magpie** (wipe the history, keep the app) — in the
+Magpie folder:
+```
+docker compose down      # stop it
+```
+Delete just the **`data`** folder, then start it again:
+```
+docker compose up -d --build
+```
+It comes back as a brand-new install — paper mode, an empty diary, and you choose
+your base currency again.
 
 ## API
 
