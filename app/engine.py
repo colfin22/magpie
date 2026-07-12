@@ -4,7 +4,7 @@ import logging
 import os
 from datetime import datetime, timedelta, timezone
 
-from . import advisor, arms, config, db, ha, ledger, market, portfolio, sleeves
+from . import advisor, arms, config, db, ha, ledger, market, portfolio, scoring, sleeves
 
 LOGGER = logging.getLogger(__name__)
 
@@ -293,6 +293,10 @@ Orders:
 Equity snapshots (daily):
 {equity}
 
+How your past calls actually turned out, scored at each sleeve's horizon (this is
+measured, not remembered — trust it over your recollection of your own reasoning):
+{calibration}
+
 Answer with ONLY the lessons note text, no preamble."""
 
 
@@ -322,7 +326,8 @@ def self_review() -> dict:
         prompt = REVIEW_PROMPT.format(
             decisions=json.dumps(decisions, indent=1)[:30000],
             orders=json.dumps({"orders": orders, **orders_extra}, indent=1)[:12000],
-            equity=json.dumps(equity, indent=1)[:4000])
+            equity=json.dumps(equity, indent=1)[:4000],
+            calibration=scoring.summary_line(conn, mode))
         try:
             note = advisor.ask(prompt, deep=True).strip()[:1500]
         except advisor.AdvisorError as e:

@@ -44,6 +44,14 @@ CREATE TABLE IF NOT EXISTS snapshots (
     at TEXT NOT NULL, mode TEXT NOT NULL, sleeve TEXT NOT NULL DEFAULT '',
     total_eur REAL NOT NULL, holdings TEXT NOT NULL, prices TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS scores (
+    decision_id INTEGER PRIMARY KEY,   -- one mark per decision, graded once
+    at TEXT NOT NULL, graded_at TEXT NOT NULL,
+    mode TEXT NOT NULL, sleeve TEXT NOT NULL, pair TEXT NOT NULL, action TEXT NOT NULL,
+    confidence REAL, horizon_days INTEGER NOT NULL,
+    entry_price REAL NOT NULL, exit_price REAL NOT NULL, move_pct REAL NOT NULL,
+    correct INTEGER NOT NULL
+);
 CREATE TABLE IF NOT EXISTS settings (
     key TEXT PRIMARY KEY, value TEXT NOT NULL
 );

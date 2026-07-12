@@ -268,6 +268,25 @@ slippage.
 
 Empty (the default) = no arms, and not one line of the live path changes.
 
+## Was it right? (decision scoring)
+
+Every buy and sell the bot makes is a falsifiable claim about direction, and it states a
+confidence when it makes it. Scoring marks that homework: each decision is graded at its
+own sleeve's horizon (swing 3 days, fortnight 10, quarter 90) against the price that
+actually happened, using candles already in the database — no new feeds, nothing to
+configure, and it runs on the nightly reconcile timer.
+
+Holds are not graded: a hold makes no claim about direction.
+
+The dashboard reports the hit rate **bucketed by stated confidence**, because the
+interesting question is not only "does it beat 50%" but **does its confidence mean
+anything** — if the 0.9 calls land no better than the 0.6 calls, the number is decoration.
+The measured record is also injected into the monthly self-review, which until now was the
+model marking its own homework from memory.
+
+Shadow arms are graded too, so you can see whether the brain's *calls* are better than a
+coin flip's even when its *returns* are not.
+
 ## Login (optional)
 
 Set `DASHBOARD_PASSWORD` (env or the settings page's Security card) to require a

@@ -4,7 +4,7 @@ from fastapi import Body, FastAPI, Form
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 
 from . import (__version__, advisor, arms, auth, config, db, engine, ha, ledger, market,
-               portfolio, universe)
+               portfolio, scoring, universe)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 LOGGER = logging.getLogger(__name__)
@@ -240,10 +240,12 @@ def api_review():
 
 @app.post("/api/reconcile")
 def api_reconcile():
-    """Nightly: absorb drift between the sleeve books and exchange reality."""
+    """Nightly: absorb drift between the sleeve books and exchange reality, and
+    mark any decision whose horizon has now elapsed (#33)."""
     conn = db.connect()
     try:
-        return ledger.reconcile(conn, config.mode(), market.tickers(config.PAIRS))
+        out = ledger.reconcile(conn, config.mode(), market.tickers(config.PAIRS))
+        return {**out, "scoring": scoring.grade(conn)}
     finally:
         conn.close()
 
@@ -495,6 +497,7 @@ def api_state():
                             "at": db.get_setting(conn, "lessons_at")},
                 "benchmark": ledger.bench_value(conn, config.mode(), prices),
                 "standings": arms.standings(conn, config.mode(), prices),
+                "calibration": scoring.calibration(conn, config.mode()),
                 "equity_curve": list(reversed(curve)),
                 "trips": trips[:15], "trip_stats": ledger.trip_stats(trips),
                 "decisions": decisions, "skims": skims}
@@ -552,6 +555,15 @@ def dashboard():
 Shadow arms trade the same market in simulation — same sleeves, same fees, no real orders.
 Fills assume the maker limit fills, so they run mildly optimistic vs the live bot's slippage.
 Arms with a shorter record are not yet comparable — mind the "since" column.</p></div>
+<div class="card" id="cal-card" hidden><div class="dim">Was it right?
+<span class="dim" id="cal-head" style="float:right"></span></div>
+<table id="cal"></table>
+<p class="dim" style="font-size:.72rem;margin:.6rem 0 0;line-height:1.45">
+Every buy/sell is a falsifiable claim about direction, graded at its sleeve's horizon
+(swing 3d, fortnight 10d, quarter 90d) against the price that actually happened. Holds
+make no claim and are not graded. The question is not only whether it beats 50%, but
+whether its <b>confident</b> calls land better than its unsure ones — if they don't,
+the confidence is decoration.</p></div>
 <div class="card"><div class="dim">Closed trades <span id="tstats" style="float:right"></span></div><table id="trades"></table></div>
 <div class="card" id="lessons-card" hidden><div class="dim" id="lessons-when"></div>
 <p class="dim" id="lessons-text" style="font-size:.85rem;line-height:1.55;margin:.4rem 0 0"></p></div>
@@ -658,6 +670,21 @@ async function load(){
           `<td class="dim">${(r.since || '').slice(0, 10)}</td></tr>`;
       }).join('');
   } else { bc.hidden = true; }
+  // calibration: is the brain right, and does its confidence mean anything? (#33)
+  const cal = s.calibration;
+  const cc = document.getElementById('cal-card');
+  if (cal && cal.graded) {
+    cc.hidden = false;
+    const edge = cal.hit_rate_pct - 50;
+    document.getElementById('cal-head').innerHTML =
+      `<b class="${edge >= 0 ? 'up' : 'down'}">${cal.hit_rate_pct}% correct</b> ` +
+      `<span class="dim">of ${cal.graded} graded · coin flip = 50%</span>`;
+    document.getElementById('cal').innerHTML =
+      '<tr><th>stated confidence</th><th>calls</th><th>hit rate</th><th>avg move</th></tr>' +
+      cal.buckets.map(b => `<tr><td>${b.bucket}</td><td class="dim">${b.n}</td>` +
+        `<td class="${b.hit_rate_pct >= 50 ? 'up' : 'down'}">${b.hit_rate_pct}%</td>` +
+        `<td class="dim">${b.avg_move_pct > 0 ? '+' : ''}${b.avg_move_pct}%</td></tr>`).join('');
+  } else { cc.hidden = true; }
   // closed trades
   const ts = s.trip_stats;
   document.getElementById('tstats').textContent = ts
