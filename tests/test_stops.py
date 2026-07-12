@@ -150,7 +150,7 @@ def test_live_places_a_real_stop_order_and_books_its_fill(monkeypatch):
             return f"{p:.1f}"
 
         def create_order(self, pair, type_, side, amount, price=None, params=None):
-            calls["order"] = (pair, type_, side, amount, price)
+            calls["order"] = (pair, type_, side, amount, price, params or {})
             return {"id": "OABC-123"}
 
         def fetch_order(self, oid, pair):
@@ -163,9 +163,13 @@ def test_live_places_a_real_stop_order_and_books_its_fill(monkeypatch):
         conn.execute("UPDATE holdings SET amount=100 WHERE mode='live' AND sleeve='swing' AND asset='EUR'")
         conn.commit()
         portfolio.execute(conn, "live", "swing", 1, "buy", "BTC/EUR", 0.9, PRICES, stop_pct=10)
-        pair, type_, side, amount, price = calls["order"]
-        assert (pair, type_, side) == ("BTC/EUR", "stop-loss", "sell")   # a real resting order
-        assert price == 90_000.0                                          # 10% under entry
+        pair, type_, side, amount, price, params = calls["order"]
+        # ccxt's unified shape: market sell + stopLossPrice. Sending type="stop-loss" with a
+        # positional price is silently wrong — Kraken rejects it ("Invalid arguments:price"),
+        # which is exactly what a live backfill hit.
+        assert (pair, type_, side) == ("BTC/EUR", "market", "sell")
+        assert price is None
+        assert params["stopLossPrice"] == 90_000.0                        # 10% under entry
         st = conn.execute("SELECT * FROM stops").fetchone()
         assert st["exchange_id"] == "OABC-123"
 
@@ -187,7 +191,7 @@ def test_an_unplaceable_stop_does_not_undo_the_buy(monkeypatch):
             return f"{p:.1f}"
 
         def create_order(self, pair, type_, side, amount, price=None, params=None):
-            if type_ == "stop-loss":
+            if (params or {}).get("stopLossPrice"):
                 raise RuntimeError("exchange rejected the stop")
             return {"id": "BUY-1"}          # the buy itself goes through fine
 

@@ -57,8 +57,12 @@ def place(conn, mode: str, sleeve: str, pair: str, amount: float, entry_price: f
         try:
             ex = market.exchange()
             amt = float(ex.amount_to_precision(pair, amount))
-            o = ex.create_order(pair, "stop-loss", "sell", amt,
-                                float(ex.price_to_precision(pair, stop_price)))
+            # ccxt's unified shape: a MARKET sell carrying stopLossPrice. ccxt then sets
+            # Kraken's ordertype=stop-loss and puts the trigger in `price` itself.
+            # Passing type="stop-loss" positionally does NOT work — ccxt never fills in
+            # the price field and Kraken rejects it with "Invalid arguments:price".
+            o = ex.create_order(pair, "market", "sell", amt, None,
+                                {"stopLossPrice": float(ex.price_to_precision(pair, stop_price))})
             exchange_id = o.get("id")
         except Exception as e:  # noqa: BLE001 - an unplaceable stop must not undo the buy
             LOGGER.warning("could not place stop for %s/%s: %s", sleeve, pair, e)
