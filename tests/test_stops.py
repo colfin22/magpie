@@ -237,3 +237,58 @@ def test_cancel_all_clears_the_book():
         assert stops.open_stops(conn, "paper") == []
     finally:
         conn.close(); os.unlink(p)
+
+
+# ---------- the partial sell: the remainder must not ride naked ----------
+
+def test_a_partial_sell_re_rests_a_stop_over_the_remainder():
+    """The brain sells fractions all the time ('SELL SOL 40%'). The sell cancels
+    the sleeve's stop (the orphan guard) — so without re-resting one, the 60%
+    left behind silently loses its floor until that sleeve next buys the coin."""
+    conn, p = make_db()
+    try:
+        buy(conn)                                        # stop at 92_000 (8% under 100k)
+        before = portfolio.holdings(conn, "paper", "swing")["BTC"]
+        portfolio.execute(conn, "paper", "swing", 2, "sell", "BTC/EUR", 0.4, PRICES)
+
+        left = portfolio.holdings(conn, "paper", "swing")["BTC"]
+        assert 0 < left < before                         # a partial exit
+        open_now = stops.open_stops(conn, "paper", "swing", "BTC/EUR")
+        assert len(open_now) == 1                        # the remainder is protected again
+        assert open_now[0]["stop_price"] == 92_000.0     # at the ORIGINAL floor, not a new one
+        assert abs(open_now[0]["amount"] - left) < 1e-9  # covering exactly what is left
+    finally:
+        conn.close(); os.unlink(p)
+
+
+def test_a_full_sell_leaves_no_stop_behind():
+    conn, p = make_db()
+    try:
+        buy(conn)
+        portfolio.execute(conn, "paper", "swing", 2, "sell", "BTC/EUR", 1.0, PRICES)
+        assert stops.open_stops(conn, "paper", "swing") == []   # nothing left to protect
+    finally:
+        conn.close(); os.unlink(p)
+
+
+def test_a_dust_remainder_gets_no_stop():
+    """Resting an exchange order over 20 cents of coin is pointless."""
+    conn, p = make_db()
+    try:
+        buy(conn)
+        portfolio.execute(conn, "paper", "swing", 2, "sell", "BTC/EUR", 0.9995, PRICES)
+        assert stops.open_stops(conn, "paper", "swing") == []
+    finally:
+        conn.close(); os.unlink(p)
+
+
+def test_the_re_rested_stop_still_fires():
+    conn, p = make_db()
+    try:
+        buy(conn)
+        portfolio.execute(conn, "paper", "swing", 2, "sell", "BTC/EUR", 0.4, PRICES)
+        fired = stops.sync(conn, "paper", {"BTC/EUR": 91_000.0})     # gaps below the floor
+        assert len(fired) == 1
+        assert portfolio.holdings(conn, "paper", "swing").get("BTC", 0) == 0
+    finally:
+        conn.close(); os.unlink(p)

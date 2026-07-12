@@ -172,6 +172,27 @@ def sync(conn, mode: str, prices: dict[str, float]) -> list[dict]:
     return fired
 
 
+MIN_STOP_VALUE = 5.0   # not worth resting an order over dust
+
+
+def reprotect(conn, mode: str, sleeve: str, pair: str, remaining: float,
+              template: dict, price: float | None) -> dict | None:
+    """After a PARTIAL sell, rest a stop again over what is left.
+
+    A sell cancels the sleeve's stops on the pair (the orphan guard), but the
+    brain routinely sells only part of a position — so without this the
+    remainder is left with no floor at all, silently, until that sleeve next
+    happens to buy the same coin. Re-rest at the ORIGINAL entry and distance, so
+    the floor stays where it was rather than ratcheting to the new price.
+    """
+    if not config.STOP_LOSS_ENABLED or remaining <= 0 or not template:
+        return None
+    if price and remaining * price < MIN_STOP_VALUE:
+        LOGGER.info("[%s/%s] remainder of %s is dust — no stop re-rested", mode, sleeve, pair)
+        return None
+    return place(conn, mode, sleeve, pair, remaining, template["entry_price"], template["pct"])
+
+
 def cancel_all(conn, mode: str) -> int:
     n = 0
     for s in open_stops(conn, mode):

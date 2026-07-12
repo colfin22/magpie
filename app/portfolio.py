@@ -138,6 +138,7 @@ def execute(conn, mode: str, sleeve: str, decision_id: int, action: str, pair: s
         # virtual books over one real account, so a stop left behind after its
         # position is gone would sell a DIFFERENT sleeve's coins. If the exchange
         # will not let go of it, refusing to sell is the safe failure (#35).
+        resting = stops.open_stops(conn, mode, sleeve, pair)   # remember before cancelling
         if not stops.cancel_for(conn, mode, sleeve, pair):
             raise ValueError(f"refusing to sell {pair}: could not cancel this sleeve's resting "
                              f"stop-loss — selling anyway would orphan it onto another sleeve")
@@ -153,6 +154,12 @@ def execute(conn, mode: str, sleeve: str, decision_id: int, action: str, pair: s
         fee = proceeds * fee_rate
         _set(conn, mode, sleeve, asset, h.get(asset, 0.0) - amount)
         _set(conn, mode, sleeve, config.BASE_CURRENCY, h.get(config.BASE_CURRENCY, 0.0) + proceeds - fee)
+        # a PARTIAL sell leaves coins behind. Their stop was just cancelled, so put a
+        # floor back under them at the original trigger — otherwise the remainder rides
+        # naked and nobody notices (#35).
+        remaining = h.get(asset, 0.0) - amount
+        if resting and remaining > 0:
+            stops.reprotect(conn, mode, sleeve, pair, remaining, resting[0], price)
         spend = proceeds
     else:
         raise ValueError(f"unknown action {action}")

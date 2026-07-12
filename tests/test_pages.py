@@ -16,6 +16,10 @@ from app import main
 def test_rendered_page_script_is_valid_js(name):
     node = shutil.which("node")
     if not node:
+        # CI installs node (see .github/workflows/ci.yml) precisely so this guard
+        # cannot skip there — a silently-skipped guard is no guard at all.
+        if os.environ.get("CI"):
+            pytest.fail("node is missing in CI — the rendered-JS guard would silently skip")
         pytest.skip("node not available to syntax-check JS")
     html = {"dashboard": main.dashboard(), "settings": main.settings_page(),
             "login": main.login_page(0)}[name]
