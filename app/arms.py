@@ -16,7 +16,14 @@ flow through the identical execute path as the LLM's decisions.
 
 Configured by SHADOW_ARMS, comma-separated `name:kind:spec`:
 
-    SHADOW_ARMS=ema:rule:ema20,dca:rule:dca,coinflip:rule:random
+    rule arms:  ema:rule:ema20,dca:rule:dca,coinflip:rule:random
+    llm arms:   claude:llm:openrouter@anthropic/claude-sonnet-5
+
+A `rule` arm's spec names a decider. An `llm` arm's spec is `provider@model`
+(model optional) — it gets the IDENTICAL prompt the live brain gets, same
+mandate, same market data, same validation. Only the model differs, which is
+what makes it a fair bake-off: whatever the equity curves do, the prompt was
+not the variable.
 
 Empty (the default) = no arms, and not one line of the live path changes.
 """
@@ -25,7 +32,7 @@ import logging
 import random
 from datetime import datetime, timezone
 
-from . import config, db, ledger, portfolio, sleeves, stops
+from . import advisor, config, db, ledger, portfolio, sleeves, stops
 
 LOGGER = logging.getLogger(__name__)
 
@@ -130,13 +137,20 @@ def parse(spec: str) -> list[dict]:
             LOGGER.warning("ignoring malformed arm %r (want name:kind:spec)", chunk)
             continue
         name, kind, how = bits
-        if kind != "rule":
-            LOGGER.warning("ignoring arm %r: only rule arms exist so far", chunk)
-            continue
-        if how not in DECIDERS:
-            LOGGER.warning("ignoring arm %r: no decider called %r", chunk, how)
-            continue
-        out.append({"name": name, "kind": kind, "spec": how, "mode": PREFIX + name})
+        if kind == "rule":
+            if how not in DECIDERS:
+                LOGGER.warning("ignoring arm %r: no decider called %r", chunk, how)
+                continue
+            out.append({"name": name, "kind": kind, "spec": how, "mode": PREFIX + name})
+        elif kind == "llm":
+            provider, _, model = how.partition("@")     # model ids contain '/', so '@' splits
+            if provider.lower() not in advisor.KEY_ATTR:
+                LOGGER.warning("ignoring arm %r: unknown provider %r", chunk, provider)
+                continue
+            out.append({"name": name, "kind": kind, "spec": how, "mode": PREFIX + name,
+                        "provider": provider.lower(), "model": model or None})
+        else:
+            LOGGER.warning("ignoring arm %r: kind must be rule or llm", chunk)
     return out
 
 
@@ -183,12 +197,13 @@ def mirror_topup(conn, amount: float, primary_mode: str) -> None:
 
 # ---------- running ----------
 
-def _record(conn, mode, sleeve, status, detail="", note=None, decision=None) -> int:
+def _record(conn, mode, sleeve, status, detail="", note=None, decision=None, raw=None) -> int:
     d = decision or {}
+    body = raw if raw is not None else (json.dumps(d) if d else None)
     cur = conn.execute(
         "INSERT INTO decisions(at, mode, sleeve, prompt, response_raw, action, pair, fraction, "
         "confidence, reasoning, status, detail) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
-        (_now(), mode, sleeve, note, json.dumps(d) if d else None, d.get("action"), d.get("pair"),
+        (_now(), mode, sleeve, note, body, d.get("action"), d.get("pair"),
          d.get("fraction"), d.get("confidence"), d.get("reasoning"), status, detail))
     conn.commit()
     return cur.lastrowid
@@ -203,20 +218,55 @@ def _valid(decision: dict) -> bool:
             and 0 < decision["fraction"] <= 1)
 
 
+DEEP_SLEEVES = ("quarter", "vault")   # rare decisions get the stronger model, as the bot does
+
+
+def _ask_llm(conn, arm: dict, sleeve: str, port: dict, market_data: list[dict],
+             extras: dict | None) -> tuple[dict | None, str, str | None]:
+    """Run a rival brain on the IDENTICAL prompt the live bot gets.
+
+    Returns (decision|None, prompt, raw). A dead or babbling model resolves to a
+    HOLD for that arm alone — exactly as it would for the real bot."""
+    from . import engine   # local import: engine imports arms
+
+    prompt = advisor.build_prompt(
+        port, market_data, engine.recent_history(conn, arm["mode"], sleeve),
+        min_order=max(portfolio.min_order_eur(p) for p in config.PAIRS),
+        mandate=sleeves.MANDATES[sleeve],
+        lessons=db.get_setting(conn, "lessons", "") or "",
+        extras=extras)
+    raw = advisor.ask(prompt, deep=sleeve in DEEP_SLEEVES,
+                      provider=arm["provider"], model=arm["model"])
+    return advisor.validate(raw), prompt, raw
+
+
 def run_sleeve(conn, arm: dict, sleeve: str, prices: dict, market_data: list[dict],
-               rng: random.Random) -> dict:
+               rng: random.Random, extras: dict | None = None) -> dict:
     mode = arm["mode"]
     port = portfolio.valued(conn, mode, sleeve, prices)
-    note = f"rule:{arm['spec']} (no LLM)"
-    decision = DECIDERS[arm["spec"]](port, market_data, sleeve, rng)
-    if not decision:
-        _record(conn, mode, sleeve, "held", "rule chose to hold", note=note)
-        return {"arm": arm["name"], "sleeve": sleeve, "status": "held"}
+    raw = None
+    if arm["kind"] == "llm":
+        note = f"llm:{arm['spec']}"
+        try:
+            decision, note, raw = _ask_llm(conn, arm, sleeve, port, market_data, extras)
+        except advisor.AdvisorError as e:
+            _record(conn, mode, sleeve, "error", str(e), note=note)
+            return {"arm": arm["name"], "sleeve": sleeve, "status": "error", "detail": str(e)}
+    else:
+        note = f"rule:{arm['spec']} (no LLM)"
+        decision = DECIDERS[arm["spec"]](port, market_data, sleeve, rng)
+    if not decision or decision.get("action") == "hold":
+        # a rival brain's HOLD carries its reasoning — that is the whole point of
+        # its diary, so record the decision itself, not just the fact of holding
+        _record(conn, mode, sleeve, "held", "chose to hold", note=note,
+                decision=decision, raw=raw)
+        return {"arm": arm["name"], "sleeve": sleeve, "status": "held",
+                "reasoning": (decision or {}).get("reasoning")}
     if not _valid(decision):
-        _record(conn, mode, sleeve, "invalid", "rule produced an impossible decision",
-                note=note, decision=decision)
+        _record(conn, mode, sleeve, "invalid", "impossible decision", note=note,
+                decision=decision, raw=raw)
         return {"arm": arm["name"], "sleeve": sleeve, "status": "invalid"}
-    decision_id = _record(conn, mode, sleeve, "pending", note=note, decision=decision)
+    decision_id = _record(conn, mode, sleeve, "pending", note=note, decision=decision, raw=raw)
     try:
         order = portfolio.execute(conn, mode, sleeve, decision_id, decision["action"],
                                   decision["pair"], decision["fraction"], prices)
@@ -231,7 +281,8 @@ def run_sleeve(conn, arm: dict, sleeve: str, prices: dict, market_data: list[dic
 
 
 def run_all(conn, primary_mode: str, due_now: list[str], prices: dict,
-            market_data: list[dict], rng: random.Random | None = None) -> list[dict]:
+            market_data: list[dict], rng: random.Random | None = None,
+            extras: dict | None = None) -> list[dict]:
     """Run every enabled arm over the sleeves that are due, on the SAME prices and
     market data the real bot just used — one market snapshot per cycle is what
     makes the comparison fair, so nothing here re-fetches anything.
@@ -247,7 +298,7 @@ def run_all(conn, primary_mode: str, due_now: list[str], prices: dict,
             ensure_seeded(conn, arm, primary_mode)
             stops.sync(conn, arm["mode"], prices)   # simulated stops, same rules as the real bot
             for s in due_now:
-                results.append(run_sleeve(conn, arm, s, prices, market_data, rng))
+                results.append(run_sleeve(conn, arm, s, prices, market_data, rng, extras))
             portfolio.skim_profits(conn, arm["mode"], prices)
             portfolio.snapshot_all(conn, arm["mode"], prices)
         except Exception as e:  # noqa: BLE001 - shadows never touch the real bot

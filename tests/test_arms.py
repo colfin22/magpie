@@ -43,9 +43,65 @@ def test_off_by_default(monkeypatch):
 
 
 def test_parse_drops_junk_but_keeps_good(monkeypatch):
-    got = arms.parse("ema:rule:ema20,typo:rule:nosuch,bad,claude:llm:anthropic,flip:rule:random")
+    got = arms.parse("ema:rule:ema20,typo:rule:nosuch,bad,nope:llm:notaprovider,flip:rule:random")
     assert [a["name"] for a in got] == ["ema", "flip"]        # junk dropped, not fatal
     assert got[0]["mode"] == "shadow:ema"
+
+
+def test_parse_llm_arms(monkeypatch):
+    got = arms.parse("claude:llm:openrouter@anthropic/claude-sonnet-5,plain:llm:gemini")
+    assert got[0]["kind"] == "llm" and got[0]["provider"] == "openrouter"
+    assert got[0]["model"] == "anthropic/claude-sonnet-5"     # '@' splits; '/' lives in the id
+    assert got[1]["provider"] == "gemini" and got[1]["model"] is None   # provider default model
+
+
+def test_an_llm_arm_gets_the_identical_prompt_and_its_own_brain(monkeypatch):
+    """The bake-off is only fair if the prompt is not the variable."""
+    stub_market(monkeypatch)
+    monkeypatch.setattr(config, "SHADOW_ARMS", "claude:llm:openrouter@anthropic/claude-sonnet-5",
+                        raising=False)
+    seen = {}
+
+    def fake_ask(prompt, deep=False, provider=None, model=None, **kw):
+        seen.update(prompt=prompt, provider=provider, model=model, deep=deep)
+        return ('{"action":"buy","pair":"BTC/EUR","fraction":0.9,'   # 0.5 of a €16 sleeve
+                '"confidence":0.7,"reasoning":"rival brain says buy"}')  # is under the €10 min
+
+    monkeypatch.setattr(arms.advisor, "ask", fake_ask)
+    conn, p = make_db()
+    try:
+        data = [row("BTC/EUR", 100_000, 90_000), row("ETH/EUR", 3_000, 4_000)]
+        res = arms.run_all(conn, "paper", ["swing"], PRICES, data, extras={"fear_greed_index": 61})
+        assert res[0]["status"] == "executed"
+        assert seen["provider"] == "openrouter"                  # its own brain...
+        assert seen["model"] == "anthropic/claude-sonnet-5"
+        assert sleeves.MANDATES["swing"] in seen["prompt"]       # ...on the real bot's prompt
+        assert "fear_greed_index" in seen["prompt"]              # same context, same instant
+        assert "BTC" in portfolio.holdings(conn, "shadow:claude", "swing")
+        d = conn.execute("SELECT * FROM decisions WHERE mode='shadow:claude'").fetchone()
+        assert d["reasoning"] == "rival brain says buy"          # its reasoning, in its own diary
+    finally:
+        conn.close(); os.unlink(p)
+
+
+def test_a_dead_rival_brain_only_holds_its_own_arm(monkeypatch):
+    stub_market(monkeypatch)
+    monkeypatch.setattr(config, "SHADOW_ARMS", "claude:llm:openrouter,ema:rule:ema20", raising=False)
+
+    def dead(*a, **k):
+        raise arms.advisor.AdvisorError("openrouter is down")
+
+    monkeypatch.setattr(arms.advisor, "ask", dead)
+    conn, p = make_db()
+    try:
+        data = [row("BTC/EUR", 100_000, 90_000), row("ETH/EUR", 3_000, 4_000)]
+        res = arms.run_all(conn, "paper", ["swing"], PRICES, data)
+        by = {r["arm"]: r["status"] for r in res}
+        assert by["claude"] == "error"          # the dead brain errors...
+        assert by["ema"] == "executed"          # ...and nobody else notices
+        assert portfolio.holdings(conn, "shadow:claude", "swing").get("BTC") is None
+    finally:
+        conn.close(); os.unlink(p)
 
 
 # ---------- the deciders ----------
@@ -240,5 +296,25 @@ def test_the_bot_has_a_since_date_too(monkeypatch):
         portfolio.snapshot_all(conn, "paper", PRICES)
         bot = arms.standings(conn, "paper", PRICES)[0]
         assert bot["key"] == "magpie" and bot["since"]
+    finally:
+        conn.close(); os.unlink(p)
+
+
+def test_a_rival_brains_HOLD_keeps_its_reasoning(monkeypatch):
+    """A hold is a real decision with real reasoning — the most interesting thing
+    an llm arm produces. Collapsing it to a bare 'held' throws that away."""
+    stub_market(monkeypatch)
+    monkeypatch.setattr(config, "SHADOW_ARMS", "claude:llm:openrouter", raising=False)
+    monkeypatch.setattr(arms.advisor, "ask", lambda *a, **k:
+                        '{"action":"hold","pair":null,"fraction":null,'
+                        '"confidence":0.4,"reasoning":"RSI is stretched; no edge here"}')
+    conn, p = make_db()
+    try:
+        res = arms.run_all(conn, "paper", ["swing"], PRICES, [row("BTC/EUR", 100_000, 90_000)])
+        assert res[0]["status"] == "held"
+        d = conn.execute("SELECT * FROM decisions WHERE mode='shadow:claude'").fetchone()
+        assert d["action"] == "hold" and d["confidence"] == 0.4
+        assert "RSI is stretched" in d["reasoning"]          # its words, in its own diary
+        assert "RSI is stretched" in d["response_raw"]       # and the raw answer kept
     finally:
         conn.close(); os.unlink(p)

@@ -151,7 +151,7 @@ def run_cycle(now=None) -> dict:
         # the shadow arms trade the SAME prices and market data, a beat behind the
         # real bot and entirely walled off from it (#31)
         try:
-            arm_results = arms.run_all(conn, mode, due_now, prices, market_data)
+            arm_results = arms.run_all(conn, mode, due_now, prices, market_data, extras=extras)
         except Exception as e:  # noqa: BLE001 - shadows are never worth a failed cycle
             LOGGER.warning("shadow arms failed: %s", e)
             arm_results = []

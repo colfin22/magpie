@@ -210,13 +210,20 @@ def _call(provider: str, key: str, chosen: str, prompt: str, http: httpx.Client)
 
 
 def ask(prompt: str, http: httpx.Client | None = None,
-        model: str | None = None, deep: bool = False) -> str:
-    """Raw model call against the configured provider. Returns the JSON text.
+        model: str | None = None, deep: bool = False,
+        provider: str | None = None) -> str:
+    """Raw model call. Returns the JSON text.
+
+    `provider` overrides config.LLM_PROVIDER for this call — that is how a shadow
+    arm runs a RIVAL brain on the same prompt (#31). Left None, the live bot's
+    path is exactly as it was.
 
     Transient upstream failures (503 overload, 429, timeouts) are retried with
     exponential backoff; only a sustained outage surfaces as an AdvisorError
     (which the engine turns into a safe HOLD)."""
-    provider = active_provider()
+    provider = (provider or active_provider()).lower()
+    if provider not in KEY_ATTR:
+        raise AdvisorError(f"unknown provider {provider!r}")
     key = key_for(provider)
     if not key:
         raise AdvisorError(f"no API key configured for provider {provider!r}")

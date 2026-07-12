@@ -249,11 +249,27 @@ the *decisions*, and nothing else.
 SHADOW_ARMS=ema:rule:ema20,dca:rule:dca,coinflip:rule:random
 ```
 
+**Rule arms** need no API key and cost nothing to run:
+
 | decider | what it does |
 |---|---|
 | `ema20` | Holds what is above its 20-day EMA, sells what falls below. Dumb momentum — the bar the LLM must clear to justify itself. |
 | `dca`   | Buys a fixed slice of its remaining cash into the first base pair every slot. Never sells. The "do nothing clever" arm. |
 | `random`| A coin flip. **The null hypothesis.** If the brain cannot beat this over months, that is the most useful thing this project will ever tell you. |
+
+**LLM arms** run a *rival brain* on the **identical prompt** — same mandate, same market data, same
+instant, same validation. Only the model differs, which is what makes it a fair bake-off: whatever
+the equity curves do, the prompt was not the variable.
+
+```
+SHADOW_ARMS=claude:llm:openrouter@anthropic/claude-sonnet-5,deepseek:llm:openrouter@deepseek/deepseek-chat
+```
+
+The spec is `provider@model` (model optional — the provider's default is used). One
+[OpenRouter](https://openrouter.ai) key reaches Claude, GPT, Grok, DeepSeek and the rest, so a
+bake-off needs one account rather than five. Each llm arm costs roughly one API call per due sleeve
+per cycle — pennies a day, but not nothing. A rival brain that errors, or babbles, holds *its own*
+arm and nobody else's.
 
 Rule arms need no API key and cost nothing to run. An arm is simply another value in the
 `mode` column, so it gets its own books, its own decision diary and its own equity history,
