@@ -191,3 +191,40 @@ def test_arms_trade_their_own_books_and_log_a_diary(monkeypatch):
             "SELECT COUNT(*) c FROM snapshots WHERE mode='shadow:ema'").fetchone()["c"] == 4
     finally:
         conn.close(); os.unlink(p)
+
+
+# ---------- the leaderboard (#32) ----------
+
+def test_standings_ranks_bot_arms_and_hodl(monkeypatch):
+    stub_market(monkeypatch)
+    monkeypatch.setattr(config, "SHADOW_ARMS", "ema:rule:ema20,flip:rule:random", raising=False)
+    monkeypatch.setattr(market, "tickers", lambda pairs: PRICES)
+    conn, p = make_db()
+    try:
+        from app import ledger
+        ledger.bench_init_if_needed(conn, "paper", 50.0, PRICES)
+        data = [row("BTC/EUR", 100_000, 90_000), row("ETH/EUR", 3_000, 4_000)]
+        arms.run_all(conn, "paper", ["swing"], PRICES, data)
+
+        st = arms.standings(conn, "paper", PRICES)
+        keys = [r["key"] for r in st]
+        assert "magpie" in keys and "ema" in keys and "hodl" in keys
+        assert st == sorted(st, key=lambda r: r["equity_eur"], reverse=True)   # ranked
+        ema = next(r for r in st if r["key"] == "ema")
+        assert ema["since"] and ema["trades"] == 1        # dated, and its trade is counted
+        assert ema["curve"]                                # has its own equity history
+        bot = next(r for r in st if r["key"] == "magpie")
+        assert bot["trades"] == 0                          # the real bot traded nothing here
+    finally:
+        conn.close(); os.unlink(p)
+
+
+def test_standings_skips_an_unseeded_arm(monkeypatch):
+    """An arm configured but not yet run must not appear as a €0 loser."""
+    monkeypatch.setattr(config, "SHADOW_ARMS", "ema:rule:ema20", raising=False)
+    monkeypatch.setattr(market, "tickers", lambda pairs: PRICES)
+    conn, p = make_db()
+    try:
+        assert [r["key"] for r in arms.standings(conn, "paper", PRICES)] == ["magpie"]
+    finally:
+        conn.close(); os.unlink(p)

@@ -494,9 +494,22 @@ def api_state():
                 "lessons": {"text": db.get_setting(conn, "lessons"),
                             "at": db.get_setting(conn, "lessons_at")},
                 "benchmark": ledger.bench_value(conn, config.mode(), prices),
+                "standings": arms.standings(conn, config.mode(), prices),
                 "equity_curve": list(reversed(curve)),
                 "trips": trips[:15], "trip_stats": ledger.trip_stats(trips),
                 "decisions": decisions, "skims": skims}
+    finally:
+        conn.close()
+
+
+@app.get("/api/arms")
+def api_arms():
+    """The leaderboard: the real bot, every shadow arm, and the phantom hodler."""
+    conn = db.connect()
+    try:
+        return {"standings": arms.standings(conn, config.mode(), market.tickers(config.PAIRS)),
+                "note": "shadow arms are simulated: fills assume the maker limit fills, "
+                        "so they run mildly optimistic against a live bot that pays slippage"}
     finally:
         conn.close()
 
@@ -516,6 +529,9 @@ def dashboard():
  table{width:100%;border-collapse:collapse;font-size:.85rem}
  td,th{padding:.35rem .5rem;text-align:left;border-bottom:1px solid #2a3140}
  .hold{color:#8b93a7}.buy{color:#4cd97b}.sell{color:#ff6b6b}.err{color:#ffb020}
+ tr.me td{background:#20283a;font-weight:700}
+ .dot{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:.45rem}
+ .bar td{color:#8b93a7;font-style:italic}
  button{background:#ff6b6b;color:#000;border:0;border-radius:8px;padding:.6rem 1.2rem;font-weight:700}
 </style></head><body>
 <h1>🐦‍⬛ Magpie <span class="dim" id="mode"></span> <span class="dim" id="ver" style="font-size:.8rem"></span>
@@ -529,6 +545,13 @@ def dashboard():
 <svg id="chart" viewBox="0 0 600 120" preserveAspectRatio="none"
      style="width:100%;height:120px;margin-top:.5rem"></svg></div>
 <div class="row" id="sleeves"></div>
+<div class="card" id="board-card" hidden><div class="dim">Leaderboard
+<span class="dim" id="board-note" style="float:right;font-size:.75rem"></span></div>
+<table id="board"></table>
+<p class="dim" style="font-size:.72rem;margin:.6rem 0 0;line-height:1.45">
+Shadow arms trade the same market in simulation — same sleeves, same fees, no real orders.
+Fills assume the maker limit fills, so they run mildly optimistic vs the live bot's slippage.
+Arms with a shorter record are not yet comparable — mind the "since" column.</p></div>
 <div class="card"><div class="dim">Closed trades <span id="tstats" style="float:right"></span></div><table id="trades"></table></div>
 <div class="card" id="lessons-card" hidden><div class="dim" id="lessons-when"></div>
 <p class="dim" id="lessons-text" style="font-size:.85rem;line-height:1.55;margin:.4rem 0 0"></p></div>
@@ -583,16 +606,58 @@ async function load(){
       'Lessons note · self-review ' + (s.lessons.at || '').slice(0, 10);
     document.getElementById('lessons-text').textContent = '"' + s.lessons.text + '"';
   } else { lc.hidden = true; }
-  // equity sparkline
-  const c = s.equity_curve || [];
-  if (c.length > 1) {
-    const vals = c.map(p => p.eur);
-    const mn = Math.min(...vals), mx = Math.max(...vals), span = (mx - mn) || 1;
-    const pts = vals.map((v, i) =>
-      `${(i / (vals.length - 1) * 600).toFixed(1)},${(110 - (v - mn) / span * 100).toFixed(1)}`).join(' ');
-    document.getElementById('chart').innerHTML =
-      `<polyline points="${pts}" fill="none" stroke="#4cd97b" stroke-width="2"/>`;
+  // equity chart — the bot plus every shadow arm, on one shared scale (#32).
+  // x is mapped by TIME, not by index: arms started on different days and have
+  // curves of different lengths, so index-mapping would silently lie.
+  const COLOURS = {magpie: '#4cd97b', hodl: '#ffb020'};
+  const PALETTE = ['#6aa9ff', '#c792ea', '#ff8fa3', '#5ad1c5'];
+  const board = s.standings || [];
+  let ci = 0;
+  board.forEach(r => { if (!COLOURS[r.key]) COLOURS[r.key] = PALETTE[ci++ % PALETTE.length]; });
+  const series = board.filter(r => (r.curve || []).length > 1)
+    .map(r => ({key: r.key, pts: r.curve.map(p => ({x: Date.parse(p.t + 'Z'), y: p.eur}))}));
+  const legacy = s.equity_curve || [];
+  if (!series.length && legacy.length > 1) {
+    series.push({key: 'magpie', pts: legacy.map(p => ({x: Date.parse(p.t + 'Z'), y: p.eur}))});
   }
+  if (series.length) {
+    const all = series.flatMap(sr => sr.pts);
+    const x0 = Math.min(...all.map(p => p.x)), x1 = Math.max(...all.map(p => p.x));
+    const y0 = Math.min(...all.map(p => p.y)), y1 = Math.max(...all.map(p => p.y));
+    const xs = (x1 - x0) || 1, ys = (y1 - y0) || 1;
+    document.getElementById('chart').innerHTML = series.map(sr => {
+      const pts = sr.pts.map(p =>
+        `${((p.x - x0) / xs * 600).toFixed(1)},${(110 - (p.y - y0) / ys * 100).toFixed(1)}`).join(' ');
+      const me = sr.key === 'magpie';
+      return `<polyline points="${pts}" fill="none" stroke="${COLOURS[sr.key] || '#8b93a7'}" ` +
+        `stroke-width="${me ? 2.5 : 1.3}" opacity="${me ? 1 : 0.75}"/>`;
+    }).join('');
+  }
+  // leaderboard (#32) — the bot vs the control arms vs doing nothing
+  const bc = document.getElementById('board-card');
+  if (board.length > 1) {
+    bc.hidden = false;
+    document.getElementById('board-note').textContent =
+      board.some(r => r.key === 'coinflip' || r.kind === 'random') ? 'beat the coin flip' : '';
+    const BARS = {hodl: 'doing nothing', random: 'chance'};
+    document.getElementById('board').innerHTML =
+      '<tr><th></th><th>equity</th><th>P/L</th><th>trades</th><th>wins</th><th>since</th></tr>' +
+      board.map(r => {
+        const me = r.key === 'magpie';
+        const bar = BARS[r.key] || BARS[r.kind];
+        const pl = r.pnl_eur;
+        return `<tr class="${me ? 'me' : (bar ? 'bar' : '')}">` +
+          `<td><span class="dot" style="background:${COLOURS[r.key] || '#8b93a7'}"></span>` +
+          `${me ? 'magpie (the brain)' : r.key}` +
+          `${bar ? ` <span class="dim">— ${bar}</span>` : ''}</td>` +
+          `<td>${CCY}${r.equity_eur.toFixed(2)}</td>` +
+          `<td class="${pl >= 0 ? 'up' : 'down'}">${pl >= 0 ? '+' : '−'}${CCY}${Math.abs(pl).toFixed(2)}` +
+          `${r.pnl_pct === null ? '' : ` (${r.pnl_pct}%)`}</td>` +
+          `<td class="dim">${r.trades}</td>` +
+          `<td class="dim">${r.win_rate_pct === null ? '—' : r.win_rate_pct + '%'}</td>` +
+          `<td class="dim">${(r.since || '').slice(0, 10)}</td></tr>`;
+      }).join('');
+  } else { bc.hidden = true; }
   // closed trades
   const ts = s.trip_stats;
   document.getElementById('tstats').textContent = ts

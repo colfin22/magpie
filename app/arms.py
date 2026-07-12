@@ -25,7 +25,7 @@ import logging
 import random
 from datetime import datetime, timezone
 
-from . import config, db, portfolio, sleeves
+from . import config, db, ledger, portfolio, sleeves
 
 LOGGER = logging.getLogger(__name__)
 
@@ -253,3 +253,52 @@ def run_all(conn, primary_mode: str, due_now: list[str], prices: dict,
             LOGGER.warning("shadow arm %s failed this cycle: %s", arm["mode"], e)
             results.append({"arm": arm["name"], "status": "error", "detail": str(e)})
     return results
+
+
+# ---------- the leaderboard (#32) ----------
+
+def _curve(conn, mode: str, limit: int = 400) -> list[dict]:
+    rows = conn.execute(
+        "SELECT substr(at,1,16) t, ROUND(SUM(total_eur),2) eur FROM snapshots "
+        "WHERE mode=? GROUP BY t ORDER BY t DESC LIMIT ?", (mode, limit)).fetchall()
+    return [dict(r) for r in reversed(rows)]
+
+
+def _entry(conn, key: str, kind: str, mode: str, prices: dict, since: str | None) -> dict:
+    ov = portfolio.overview(conn, mode, prices)
+    invested = sum(v["allocated"] or 0 for v in ov["sleeves"])
+    trips = ledger.round_trips(conn, mode)
+    stats = ledger.trip_stats(trips)
+    trades = conn.execute("SELECT COUNT(*) c FROM orders WHERE mode=?", (mode,)).fetchone()["c"]
+    equity = ov["total_eur"]
+    return {"key": key, "kind": kind, "mode": mode, "equity_eur": equity,
+            "invested_eur": round(invested, 2),
+            "pnl_eur": round(equity - invested, 2),
+            "pnl_pct": round((equity - invested) / invested * 100, 1) if invested else None,
+            "trades": trades,
+            "win_rate_pct": stats["win_rate_pct"] if stats else None,
+            "since": since, "curve": _curve(conn, mode)}
+
+
+def standings(conn, primary_mode: str, prices: dict[str, float]) -> list[dict]:
+    """The real bot, every shadow arm, and the phantom hodler — ranked by equity.
+
+    `since` is not decoration: an arm added later has a shorter and strictly
+    non-comparable record, and the table must never let that pass for skill.
+    """
+    rows = [_entry(conn, "magpie", "bot", primary_mode, prices,
+                   db.get_setting(conn, "bot_since"))]
+    for arm in enabled():
+        if not conn.execute("SELECT 1 FROM sleeve_meta WHERE mode=?", (arm["mode"],)).fetchone():
+            continue   # configured but not seeded yet — it starts at the next cycle
+        rows.append(_entry(conn, arm["name"], arm["spec"], arm["mode"], prices,
+                           db.get_setting(conn, f"arm_since_{arm['name']}")))
+    bench = ledger.bench_value(conn, primary_mode, prices)
+    if bench:
+        rows.append({"key": "hodl", "kind": "bench", "mode": None,
+                     "equity_eur": bench["hodl_eur"], "invested_eur": bench["invested"],
+                     "pnl_eur": round(bench["hodl_eur"] - bench["invested"], 2),
+                     "pnl_pct": round((bench["hodl_eur"] - bench["invested"])
+                                      / bench["invested"] * 100, 1) if bench["invested"] else None,
+                     "trades": 0, "win_rate_pct": None, "since": bench["since"], "curve": []})
+    return sorted(rows, key=lambda r: r["equity_eur"], reverse=True)
