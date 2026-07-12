@@ -18,8 +18,8 @@ you a daily digest. Your only control is the halt button — by design.
 
 <p align="center">
   <img src="docs/screenshots/dashboard-preview.png" width="92%"
-       alt="The Magpie dashboard — the dynamic alt universe, equity vs buy-and-hold, the four sleeves holding SOL/XRP/TRX/BTC, closed alt trades, vault skims, the monthly lessons note and the decision diary including a top-10 sell-floor auto-exit">
-  <br><sub>Dashboard a few months in, trading the top-5 alt universe (simulated preview data — a fresh install starts humbler).</sub>
+       alt="The Magpie dashboard — the dynamic alt universe, an equity chart with the shadow arms overlaid, the four sleeves, the leaderboard ranking the LLM against a momentum rule, a DCA, a coin flip and buy-and-hold, decision scoring by stated confidence, resting stop-losses, closed trades, vault skims, the monthly lessons note and the decision diary">
+  <br><sub>Dashboard a few months in: the <b>leaderboard</b> ranks the brain against its control arms — a dumb EMA rule, a DCA, a coin flip and doing nothing — while <b>"Was it right?"</b> grades every call at its horizon and asks whether the model's confidence means anything. Simulated preview data; a fresh install starts humbler.</sub>
 </p>
 
 ## How it thinks

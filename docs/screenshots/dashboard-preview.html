@@ -86,8 +86,9 @@
     <span class="lbl">Universe</span>
     <span class="chip">BTC</span><span class="chip">ETH</span>
     <span class="chip">BNB</span><span class="chip">XRP</span>
-    <span class="chip">SOL</span><span class="chip new">TRX</span>
-    <span style="color:var(--faint)">· top-5 alts by market cap, refreshed weekly</span>
+    <span class="chip">SOL</span><span class="chip">TRX</span>
+    <span class="chip">HYPE</span><span class="chip">DOGE</span><span class="chip new">ZEC</span>
+    <span style="color:var(--faint)">· top-8 alts by market cap, refreshed weekly</span>
   </div>
 
   <!-- HERO + CHART -->
@@ -102,6 +103,9 @@
     <div>
       <div class="charthead">
         <span class="k"><span class="swatch" style="background:var(--green)"></span>Magpie</span>
+        <span class="k"><span class="swatch" style="background:var(--blue)"></span>EMA arm</span>
+        <span class="k"><span class="swatch" style="background:#c792ea"></span>DCA arm</span>
+        <span class="k"><span class="swatch" style="background:var(--dim)"></span>Coin flip</span>
         <span class="k"><span class="swatch" style="background:var(--purple);opacity:.8"></span>Buy &amp; hold</span>
         <span class="chartmeta">12 Jul → 21 Sep · €50 top-up 1 Aug</span>
       </div>
@@ -131,6 +135,13 @@
         <!-- buy&hold dashed -->
         <polyline fill="none" stroke="#a78bfa" stroke-width="2" stroke-dasharray="6 5" opacity="0.85"
           points="40,197 110,199 180,195 250,198 330,194 400,120 470,114 540,110 610,106 680,100 740,96"/>
+        <!-- shadow arms (#31): same market, same fees, simulated -->
+        <polyline fill="none" stroke="#5b8cff" stroke-width="1.6" opacity="0.8"
+          points="40,197 110,200 180,196 250,199 330,195 400,128 470,124 540,118 610,116 680,110 740,104"/>
+        <polyline fill="none" stroke="#c792ea" stroke-width="1.6" opacity="0.7"
+          points="40,197 110,201 180,199 250,200 330,198 400,132 470,130 540,127 610,124 680,120 740,116"/>
+        <polyline fill="none" stroke="#8b93a7" stroke-width="1.6" opacity="0.7"
+          points="40,197 110,205 180,201 250,212 330,208 400,146 470,158 540,152 610,170 680,178 740,190"/>
         <!-- magpie line -->
         <polyline fill="none" stroke="#4cd97b" stroke-width="2.5"
           points="40,196 110,198 180,193 250,197 330,192 400,112 470,104 540,96 610,90 680,82 740,74"/>
@@ -179,6 +190,60 @@
       <svg class="spark" width="100%" height="34" viewBox="0 0 200 34" preserveAspectRatio="none">
         <polyline fill="none" stroke="#a78bfa" stroke-width="2" points="0,30 40,30 40,24 90,24 90,17 140,17 140,10 190,10 190,6 200,6"/>
       </svg>
+    </div>
+  </div>
+
+  <!-- LEADERBOARD (#32) -->
+  <div class="card" style="margin-top:16px">
+    <div class="cardhead"><span class="eyebrow" style="margin:0">Leaderboard</span>
+      <span class="stat">beat the coin flip</span></div>
+    <table>
+      <thead><tr><th>Strategy</th><th class="tp">Equity</th><th class="tp">P/L</th><th class="tp">Trades</th><th class="tp">Wins</th><th class="tp">Since</th></tr></thead>
+      <tbody class="mono">
+        <tr style="background:rgba(76,217,123,.06)">
+          <td><span class="swatch" style="background:var(--green);margin-right:8px"></span><b>magpie (the brain)</b></td>
+          <td class="tp"><b>€112.40</b></td><td class="tp up">+€14.49 (+14.8%)</td><td class="tp">24</td><td class="tp">63%</td><td class="tp tag">12 Jul</td></tr>
+        <tr><td><span class="swatch" style="background:var(--blue);margin-right:8px"></span>ema <span class="tag">— dumb momentum</span></td>
+          <td class="tp">€108.10</td><td class="tp up">+€10.19 (+10.4%)</td><td class="tp">11</td><td class="tp">55%</td><td class="tp tag">12 Jul</td></tr>
+        <tr><td><span class="swatch" style="background:var(--purple);margin-right:8px"></span>hodl <span class="tag">— doing nothing</span></td>
+          <td class="tp">€106.20</td><td class="tp up">+€8.29 (+8.5%)</td><td class="tp">0</td><td class="tp">—</td><td class="tp tag">12 Jul</td></tr>
+        <tr><td><span class="swatch" style="background:#c792ea;margin-right:8px"></span>dca <span class="tag">— never sells</span></td>
+          <td class="tp">€104.30</td><td class="tp up">+€6.39 (+6.5%)</td><td class="tp">14</td><td class="tp">—</td><td class="tp tag">12 Jul</td></tr>
+        <tr><td><span class="swatch" style="background:var(--dim);margin-right:8px"></span>coinflip <span class="tag">— chance</span></td>
+          <td class="tp">€88.90</td><td class="tp down">−€9.01 (−9.2%)</td><td class="tp">58</td><td class="tp">34%</td><td class="tp tag">12 Jul</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- SCORING (#33) + STOPS (#35) -->
+  <div class="row2">
+    <div class="card">
+      <div class="cardhead"><span class="eyebrow" style="margin:0">Was it right?</span>
+        <span class="stat"><span class="up">58.5% correct</span> of 41 graded · coin flip = 50%</span></div>
+      <table>
+        <thead><tr><th>Stated confidence</th><th class="tp">Calls</th><th class="tp">Hit rate</th><th class="tp">Avg move</th></tr></thead>
+        <tbody class="mono">
+          <tr><td>≤0.5</td><td class="tp">4</td><td class="tp down">25.0%</td><td class="tp">−1.8%</td></tr>
+          <tr><td>0.5–0.7</td><td class="tp">20</td><td class="tp up">55.0%</td><td class="tp">+0.6%</td></tr>
+          <tr><td>0.7–0.85</td><td class="tp">12</td><td class="tp up">66.7%</td><td class="tp">+2.4%</td></tr>
+          <tr><td>≥0.85</td><td class="tp">5</td><td class="tp up">80.0%</td><td class="tp">+4.1%</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="card">
+      <div class="cardhead"><span class="eyebrow" style="margin:0">Resting stop-losses</span>
+        <span class="stat">2 at the exchange</span></div>
+      <table>
+        <thead><tr><th>Sleeve</th><th>Pair</th><th class="tp">Stop</th><th class="tp">Below entry</th></tr></thead>
+        <tbody class="mono">
+          <tr><td class="slv">swing</td><td>SOL/EUR</td><td class="tp">€138.20</td><td class="tp down">−8.0%</td></tr>
+          <tr><td class="slv">fortnight</td><td>ETH/EUR</td><td class="tp">€2,290.00</td><td class="tp down">−8.5%</td></tr>
+        </tbody>
+      </table>
+      <div class="lessons" style="margin-top:14px">
+        <span class="lbl">Why they live at the exchange</span>
+        <p>They protect the position even when the bot is offline — between cycles, through an LLM outage, while you sleep.</p>
+      </div>
     </div>
   </div>
 
