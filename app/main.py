@@ -3,7 +3,8 @@ import logging
 from fastapi import Body, FastAPI, Form
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 
-from . import __version__, advisor, auth, config, db, engine, ha, ledger, market, portfolio, universe
+from . import (__version__, advisor, arms, auth, config, db, engine, ha, ledger, market,
+               portfolio, universe)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 LOGGER = logging.getLogger(__name__)
@@ -434,7 +435,9 @@ def api_topup(amount: float = 0):
         return Response(status_code=400, content="?amount= must be positive")
     conn = db.connect()
     try:
-        return portfolio.apply_topup(conn, "paper", amount)
+        result = portfolio.apply_topup(conn, "paper", amount)
+        arms.mirror_topup(conn, amount, "paper")   # arms must stay capital-comparable
+        return result
     finally:
         conn.close()
 

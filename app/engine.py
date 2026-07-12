@@ -4,7 +4,7 @@ import logging
 import os
 from datetime import datetime, timedelta, timezone
 
-from . import advisor, config, db, ha, ledger, market, portfolio, sleeves
+from . import advisor, arms, config, db, ha, ledger, market, portfolio, sleeves
 
 LOGGER = logging.getLogger(__name__)
 
@@ -120,6 +120,7 @@ def run_cycle(now=None) -> dict:
                 ha.notify("Magpie top-up detected",
                           f"{config.symbol()}{topup['topup_eur']} new cash split three ways "
                           f"({config.symbol()}{topup['per_sleeve']} per sleeve)")
+                arms.mirror_topup(conn, topup["topup_eur"], mode)
         except Exception as e:  # noqa: BLE001 - a balance blip must not stop the cycle
             LOGGER.warning("top-up detection failed: %s", e)
 
@@ -131,11 +132,20 @@ def run_cycle(now=None) -> dict:
         skims = portfolio.skim_profits(conn, mode, prices)
         ov = portfolio.snapshot_all(conn, mode, prices)
         ledger.bench_init_if_needed(conn, mode, ov["total_eur"], prices)
+        # the shadow arms trade the SAME prices and market data, a beat behind the
+        # real bot and entirely walled off from it (#31)
+        try:
+            arm_results = arms.run_all(conn, mode, due_now, prices, market_data)
+        except Exception as e:  # noqa: BLE001 - shadows are never worth a failed cycle
+            LOGGER.warning("shadow arms failed: %s", e)
+            arm_results = []
+        # NB arms are deliberately absent from _track_cycle_outcome: only the real
+        # bot's health raises an alarm.
         _track_cycle_outcome(conn, results, crashed=False)
         db.set_setting(conn, "last_cycle_at", _now())
         _note_retry_state(conn, results, fresh_cycle=True)
         return {"status": "ok", "mode": mode, "topup": topup, "results": results,
-                "skims": skims, "total_eur": ov["total_eur"]}
+                "skims": skims, "total_eur": ov["total_eur"], "arms": arm_results}
     except Exception:
         _track_cycle_outcome(conn, [], crashed=True)
         raise

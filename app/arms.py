@@ -1,0 +1,255 @@
+"""Shadow arms: control strategies traded in simulation beside the live bot (#31).
+
+The point is measurement. With one bot there is no way to tell skill from luck
+or from a rising market: an arm is a rival strategy that sees exactly the same
+market at exactly the same instant and trades the same books with the same
+fees — so any difference in the equity curves is the difference in the
+decisions, and nothing else.
+
+An arm is just another value in the `mode` column, so the sleeves, skims,
+snapshots, round trips and equity history all work on it unchanged, and
+portfolio.execute() only ever reaches Kraken when mode == "live". Nothing here
+can place a real order.
+
+The rule deciders return exactly the dict advisor.validate() returns, so they
+flow through the identical execute path as the LLM's decisions.
+
+Configured by SHADOW_ARMS, comma-separated `name:kind:spec`:
+
+    SHADOW_ARMS=ema:rule:ema20,dca:rule:dca,coinflip:rule:random
+
+Empty (the default) = no arms, and not one line of the live path changes.
+"""
+import json
+import logging
+import random
+from datetime import datetime, timezone
+
+from . import config, db, portfolio, sleeves
+
+LOGGER = logging.getLogger(__name__)
+
+PREFIX = "shadow:"
+RSI_OVERBOUGHT = 70.0     # ema20 arm won't buy into froth
+DCA_FRACTION = 0.2        # dca arm deploys a fifth of its remaining cash each slot
+RANDOM_MIN, RANDOM_MAX = 0.2, 0.5  # coin-flip arm's position sizing
+
+
+def _now() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+# ---------- the deciders ----------
+# Each returns a decision dict (same shape as advisor.validate) or None to hold.
+# They read the same `market_data` the LLM is given, so there are no indicators
+# here that the brain cannot also see.
+
+def _rows(market_data: list[dict]) -> dict[str, dict]:
+    """Daily summaries by pair, skipping any pair with no candle data."""
+    return {r["pair"]: r for r in market_data
+            if r.get("timeframe") == "1d" and not r.get("error")}
+
+
+def _held(port: dict) -> list[str]:
+    return [a for a in port["holdings"] if a != config.BASE_CURRENCY]
+
+
+def _pair_of(asset: str) -> str:
+    return f"{asset}/{config.BASE_CURRENCY}"
+
+
+def decide_ema20(port, market_data, sleeve, rng):
+    """Dumb momentum: hold what is above its 20-day EMA, sell what falls below.
+
+    This is the bar the LLM has to clear to justify existing."""
+    rows = _rows(market_data)
+    for asset in _held(port):                       # exits first — protect capital
+        r = rows.get(_pair_of(asset))
+        if r and r.get("ema20") and r["price"] < r["ema20"]:
+            return {"action": "sell", "pair": _pair_of(asset), "fraction": 1.0,
+                    "confidence": 0.6,
+                    "reasoning": f"price {r['price']:.2f} below EMA20 {r['ema20']:.2f}"}
+    if port["holdings"].get(config.BASE_CURRENCY, 0) <= 0:
+        return None
+    up = [r for r in rows.values()
+          if r.get("ema20") and r["price"] > r["ema20"]
+          and (r.get("rsi14") or 0) < RSI_OVERBOUGHT]
+    if not up:
+        return None
+    best = max(up, key=lambda r: r.get("return_7_candles_pct") or 0)
+    return {"action": "buy", "pair": best["pair"], "fraction": 1.0, "confidence": 0.6,
+            "reasoning": f"price {best['price']:.2f} above EMA20 {best['ema20']:.2f}, "
+                         f"RSI {best.get('rsi14') or 0:.0f}, strongest 7-candle return"}
+
+
+def decide_dca(port, market_data, sleeve, rng):
+    """Buy a fixed slice of remaining cash into the first base pair. Never sells.
+
+    The 'do nothing clever' arm."""
+    if not config.BASE_PAIRS:
+        return None
+    pair = config.BASE_PAIRS[0]
+    if port["holdings"].get(config.BASE_CURRENCY, 0) <= 0:
+        return None
+    return {"action": "buy", "pair": pair, "fraction": DCA_FRACTION, "confidence": 0.5,
+            "reasoning": f"scheduled DCA: {DCA_FRACTION:.0%} of remaining cash into {pair}"}
+
+
+def decide_random(port, market_data, sleeve, rng):
+    """The null hypothesis. If the brain cannot beat this over months, that is
+    the most valuable thing this project will ever tell us."""
+    rows = _rows(market_data)
+    if not rows:
+        return None
+    action = rng.choice(["buy", "sell", "hold"])
+    fraction = round(rng.uniform(RANDOM_MIN, RANDOM_MAX), 3)
+    if action == "buy" and port["holdings"].get(config.BASE_CURRENCY, 0) > 0:
+        return {"action": "buy", "pair": rng.choice(sorted(rows)), "fraction": fraction,
+                "confidence": 0.5, "reasoning": "coin flip"}
+    if action == "sell" and _held(port):
+        return {"action": "sell", "pair": _pair_of(rng.choice(sorted(_held(port)))),
+                "fraction": fraction, "confidence": 0.5, "reasoning": "coin flip"}
+    return None   # 'hold', or an impossible flip (sell with nothing, buy with no cash)
+
+
+DECIDERS = {"ema20": decide_ema20, "dca": decide_dca, "random": decide_random}
+
+
+# ---------- the registry ----------
+
+def parse(spec: str) -> list[dict]:
+    """`name:kind:spec` x N. Unknown kinds/deciders are dropped with a warning —
+    a typo in the config must never take the live bot down with it."""
+    out = []
+    for chunk in (spec or "").split(","):
+        chunk = chunk.strip()
+        if not chunk:
+            continue
+        bits = [b.strip() for b in chunk.split(":")]
+        if len(bits) != 3:
+            LOGGER.warning("ignoring malformed arm %r (want name:kind:spec)", chunk)
+            continue
+        name, kind, how = bits
+        if kind != "rule":
+            LOGGER.warning("ignoring arm %r: only rule arms exist so far", chunk)
+            continue
+        if how not in DECIDERS:
+            LOGGER.warning("ignoring arm %r: no decider called %r", chunk, how)
+            continue
+        out.append({"name": name, "kind": kind, "spec": how, "mode": PREFIX + name})
+    return out
+
+
+def enabled() -> list[dict]:
+    return parse(config.SHADOW_ARMS)
+
+
+def ensure_seeded(conn, arm: dict, primary_mode: str) -> bool:
+    """An arm starts with the same STAKE as the real bot, not its current equity,
+    so the curves diverge only through decisions. The vault starts empty, as
+    the real one does — it is profits-only.
+
+    Returns True if it seeded the arm just now (the caller needs to know: a
+    fresh seed already copies the real bot's raised stake, so a top-up landing
+    in the same breath must not then be applied to it twice).
+    """
+    if conn.execute("SELECT 1 FROM sleeve_meta WHERE mode=?", (arm["mode"],)).fetchone():
+        return False
+    for s in sleeves.ALL:
+        row = conn.execute("SELECT allocated FROM sleeve_meta WHERE mode=? AND sleeve=?",
+                           (primary_mode, s)).fetchone()
+        allocated = (row["allocated"] if row else 0.0) if s in sleeves.ACTIVE else 0.0
+        conn.execute("INSERT INTO sleeve_meta(mode, sleeve, allocated, hwm) VALUES(?,?,?,?)",
+                     (arm["mode"], s, allocated, allocated))
+        conn.execute("INSERT INTO holdings(mode, sleeve, asset, amount) VALUES(?,?,?,?)",
+                     (arm["mode"], s, config.BASE_CURRENCY, allocated))
+    db.set_setting(conn, f"arm_since_{arm['name']}", _now())
+    conn.commit()
+    LOGGER.info("seeded shadow arm %s from %s's stake", arm["mode"], primary_mode)
+    return True
+
+
+def mirror_topup(conn, amount: float, primary_mode: str) -> None:
+    """Fresh cash reaches every arm too. Without this the arms fall behind the
+    real bot's capital and the equity curves stop being comparable."""
+    for arm in enabled():
+        try:
+            if ensure_seeded(conn, arm, primary_mode):
+                continue   # seeded from the real bot's stake, which already includes this cash
+            portfolio.apply_topup(conn, arm["mode"], amount)
+        except Exception as e:  # noqa: BLE001 - an arm must never break a real top-up
+            LOGGER.warning("arm %s missed the top-up: %s", arm["mode"], e)
+
+
+# ---------- running ----------
+
+def _record(conn, mode, sleeve, status, detail="", note=None, decision=None) -> int:
+    d = decision or {}
+    cur = conn.execute(
+        "INSERT INTO decisions(at, mode, sleeve, prompt, response_raw, action, pair, fraction, "
+        "confidence, reasoning, status, detail) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+        (_now(), mode, sleeve, note, json.dumps(d) if d else None, d.get("action"), d.get("pair"),
+         d.get("fraction"), d.get("confidence"), d.get("reasoning"), status, detail))
+    conn.commit()
+    return cur.lastrowid
+
+
+def _valid(decision: dict) -> bool:
+    """The same boundary the LLM's answers cross — a buggy rule gets no more
+    trust than a hallucinating model."""
+    return (decision.get("action") in ("buy", "sell")
+            and decision.get("pair") in config.PAIRS
+            and isinstance(decision.get("fraction"), (int, float))
+            and 0 < decision["fraction"] <= 1)
+
+
+def run_sleeve(conn, arm: dict, sleeve: str, prices: dict, market_data: list[dict],
+               rng: random.Random) -> dict:
+    mode = arm["mode"]
+    port = portfolio.valued(conn, mode, sleeve, prices)
+    note = f"rule:{arm['spec']} (no LLM)"
+    decision = DECIDERS[arm["spec"]](port, market_data, sleeve, rng)
+    if not decision:
+        _record(conn, mode, sleeve, "held", "rule chose to hold", note=note)
+        return {"arm": arm["name"], "sleeve": sleeve, "status": "held"}
+    if not _valid(decision):
+        _record(conn, mode, sleeve, "invalid", "rule produced an impossible decision",
+                note=note, decision=decision)
+        return {"arm": arm["name"], "sleeve": sleeve, "status": "invalid"}
+    decision_id = _record(conn, mode, sleeve, "pending", note=note, decision=decision)
+    try:
+        order = portfolio.execute(conn, mode, sleeve, decision_id, decision["action"],
+                                  decision["pair"], decision["fraction"], prices)
+    except Exception as e:  # noqa: BLE001 - a rejected order (under the minimum, nothing
+        conn.execute("UPDATE decisions SET status='error', detail=? WHERE id=?",  # to sell)
+                     (str(e), decision_id))                                       # is normal
+        conn.commit()
+        return {"arm": arm["name"], "sleeve": sleeve, "status": "error", "detail": str(e)}
+    conn.execute("UPDATE decisions SET status='executed' WHERE id=?", (decision_id,))
+    conn.commit()
+    return {"arm": arm["name"], "sleeve": sleeve, "status": "executed", "order": order}
+
+
+def run_all(conn, primary_mode: str, due_now: list[str], prices: dict,
+            market_data: list[dict], rng: random.Random | None = None) -> list[dict]:
+    """Run every enabled arm over the sleeves that are due, on the SAME prices and
+    market data the real bot just used — one market snapshot per cycle is what
+    makes the comparison fair, so nothing here re-fetches anything.
+
+    No arm may ever disturb the real bot: every arm is isolated, and a failure
+    is logged and stepped over. Arms are also deliberately absent from the
+    cycle-failure alerting — a broken shadow is not a 3am problem.
+    """
+    rng = rng or random.Random()
+    results = []
+    for arm in enabled():
+        try:
+            ensure_seeded(conn, arm, primary_mode)
+            for s in due_now:
+                results.append(run_sleeve(conn, arm, s, prices, market_data, rng))
+            portfolio.skim_profits(conn, arm["mode"], prices)
+            portfolio.snapshot_all(conn, arm["mode"], prices)
+        except Exception as e:  # noqa: BLE001 - shadows never touch the real bot
+            LOGGER.warning("shadow arm %s failed this cycle: %s", arm["mode"], e)
+            results.append({"arm": arm["name"], "status": "error", "detail": str(e)})
+    return results

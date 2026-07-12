@@ -237,6 +237,37 @@ against Kraken before it's saved, is always tradeable regardless of the rankings
 and — because you chose it deliberately — is **exempt from the sell floor**.
 
 
+## Shadow arms (optional)
+
+One bot cannot tell you whether it is any good. If it ends the year up 6%, was that
+skill, luck, or simply a rising market? **Shadow arms** are rival strategies that trade
+in simulation alongside the real bot, on exactly the same market data, in the same
+sleeves, with the same fees — so any gap between the equity curves is the difference in
+the *decisions*, and nothing else.
+
+```
+SHADOW_ARMS=ema:rule:ema20,dca:rule:dca,coinflip:rule:random
+```
+
+| decider | what it does |
+|---|---|
+| `ema20` | Holds what is above its 20-day EMA, sells what falls below. Dumb momentum — the bar the LLM must clear to justify itself. |
+| `dca`   | Buys a fixed slice of its remaining cash into the first base pair every slot. Never sells. The "do nothing clever" arm. |
+| `random`| A coin flip. **The null hypothesis.** If the brain cannot beat this over months, that is the most useful thing this project will ever tell you. |
+
+Rule arms need no API key and cost nothing to run. An arm is simply another value in the
+`mode` column, so it gets its own books, its own decision diary and its own equity history,
+and `portfolio.execute()` only ever reaches the exchange when the mode is `live` — a shadow
+arm **cannot** place a real order. Arms start from the real bot's stake and receive the same
+top-ups, so the comparison stays honest; a broken arm is logged and stepped over and can
+never disturb the real bot, or wake you at 3am.
+
+Caveat worth knowing: shadow fills are simulated at the touch price and assume the maker
+limit always fills, so the arms are mildly *optimistic* against a live bot that pays real
+slippage.
+
+Empty (the default) = no arms, and not one line of the live path changes.
+
 ## Login (optional)
 
 Set `DASHBOARD_PASSWORD` (env or the settings page's Security card) to require a
