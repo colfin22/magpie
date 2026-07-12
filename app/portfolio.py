@@ -9,7 +9,7 @@ import json
 import logging
 from datetime import datetime, timezone
 
-from . import config, db, market, sleeves
+from . import config, db, market, sleeves, stops
 
 LOGGER = logging.getLogger(__name__)
 TOPUP_EPSILON_EUR = 1.0  # ignore dust/fee drift below this when detecting deposits
@@ -111,7 +111,7 @@ def _live_fill(pair: str, side: str, amount: float, limit_price: float) -> tuple
 
 
 def execute(conn, mode: str, sleeve: str, decision_id: int, action: str, pair: str,
-            fraction: float, prices: dict[str, float]) -> dict:
+            fraction: float, prices: dict[str, float], stop_pct: float | None = None) -> dict:
     """Execute a validated buy/sell inside one sleeve's books.
 
     Fills aim for maker pricing: a post-only limit at the current touch
@@ -134,6 +134,13 @@ def execute(conn, mode: str, sleeve: str, decision_id: int, action: str, pair: s
         _set(conn, mode, sleeve, config.BASE_CURRENCY, h.get(config.BASE_CURRENCY, 0.0) - spend)
         _set(conn, mode, sleeve, asset, h.get(asset, 0.0) + amount)
     elif action == "sell":
+        # clear this sleeve's resting stops on this pair FIRST. The sleeves are
+        # virtual books over one real account, so a stop left behind after its
+        # position is gone would sell a DIFFERENT sleeve's coins. If the exchange
+        # will not let go of it, refusing to sell is the safe failure (#35).
+        if not stops.cancel_for(conn, mode, sleeve, pair):
+            raise ValueError(f"refusing to sell {pair}: could not cancel this sleeve's resting "
+                             f"stop-loss — selling anyway would orphan it onto another sleeve")
         price = t["ask"]
         amount = h.get(asset, 0.0) * fraction
         proceeds = amount * price
@@ -156,8 +163,9 @@ def execute(conn, mode: str, sleeve: str, decision_id: int, action: str, pair: s
     conn.commit()
     LOGGER.info("[%s/%s] %s %.8f %s @ %.2f (€%.2f, fee €%.2f)",
                 mode, sleeve, action, amount, asset, price, spend, fee)
+    stop = stops.place(conn, mode, sleeve, pair, amount, price, stop_pct) if action == "buy" else None
     return {"side": action, "pair": pair, "amount": amount, "price": price,
-            "cost_eur": round(spend, 2), "fee_eur": round(fee, 2)}
+            "cost_eur": round(spend, 2), "fee_eur": round(fee, 2), "stop": stop}
 
 
 def skim_profits(conn, mode: str, prices: dict[str, float]) -> list[dict]:

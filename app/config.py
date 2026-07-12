@@ -110,6 +110,14 @@ CONTEXT_FUNDING = os.environ.get("CONTEXT_FUNDING", "true").lower() == "true"
 CONTEXT_DEPTH = os.environ.get("CONTEXT_DEPTH", "true").lower() == "true"
 NEWS_RSS_URL = os.environ.get("NEWS_RSS_URL", "")
 
+# exchange-side stop-losses (#35). OFF by default. The brain proposes a distance,
+# these clamps decide what is sane. A stop lives AT Kraken so it still works when
+# the bot does not (outage, crash, the 6h gap between cycles).
+STOP_LOSS_ENABLED = os.environ.get("STOP_LOSS_ENABLED", "false").lower() == "true"
+STOP_LOSS_PCT = float(os.environ.get("STOP_LOSS_PCT", "8"))          # default distance below entry
+STOP_LOSS_MIN_PCT = float(os.environ.get("STOP_LOSS_MIN_PCT", "2"))  # tighter than this = stopped out by noise
+STOP_LOSS_MAX_PCT = float(os.environ.get("STOP_LOSS_MAX_PCT", "30"))
+
 # shadow arms: rival strategies traded in simulation for comparison (#31).
 # `name:kind:spec`, comma-separated, e.g. "ema:rule:ema20,coinflip:rule:random".
 # Empty = off, and the live path is untouched.
@@ -164,6 +172,8 @@ EDITABLE = {
     "DYNAMIC_SELL_FLOOR_N": "int",
     "SHADOW_ARMS": "str",
     "CONTEXT_FUNDING": "bool", "CONTEXT_DEPTH": "bool", "NEWS_RSS_URL": "str",
+    "STOP_LOSS_ENABLED": "bool", "STOP_LOSS_PCT": "float",
+    "STOP_LOSS_MIN_PCT": "float", "STOP_LOSS_MAX_PCT": "float",
     "DASHBOARD_USER": "str", "DASHBOARD_PASSWORD": "str",
 }
 SECRET_KEYS = {"GEMINI_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY",

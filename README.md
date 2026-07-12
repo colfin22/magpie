@@ -268,6 +268,32 @@ slippage.
 
 Empty (the default) = no arms, and not one line of the live path changes.
 
+## Stop-losses (optional)
+
+```
+STOP_LOSS_ENABLED=true
+```
+
+When the bot buys, it also rests a protective sell **at the exchange**, a distance below
+its entry that it chooses itself and the config clamps (`STOP_LOSS_MIN_PCT`..`STOP_LOSS_MAX_PCT`,
+default 8%). The point of the stop living at Kraken rather than in this process is that it
+still works **when the bot does not** — in the six hours between cycles, through an LLM
+outage, a crashed container, a reboot, or while you are asleep.
+
+This is not a position cap and not a circuit breaker on the strategy. It is a floor under
+one position.
+
+Three things worth knowing:
+
+- **A halt does not cancel resting stops.** They are protective; cancelling them would leave
+  positions naked while trading is paused. Clear them deliberately with `POST /api/stops/cancel`.
+- **A sell cancels that sleeve's stops first, and refuses to sell if it cannot.** The sleeves
+  are virtual books over *one* real Kraken account, and a resting stop does not know about
+  sleeves — it just sells coins. An orphaned stop would sell a *different* sleeve's position.
+- **A fired stop is booked as a sale**, with a row in the decision diary and the ledger — it is
+  never quietly absorbed as "drift" by the nightly reconcile. The sale is claimed first,
+  precisely so it cannot be.
+
 ## What the brain sees (context)
 
 Alongside candles, EMA/RSI/returns, the live spread and the Fear & Greed index, the bot is

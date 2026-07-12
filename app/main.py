@@ -4,7 +4,7 @@ from fastapi import Body, FastAPI, Form
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 
 from . import (__version__, advisor, arms, auth, config, db, engine, ha, ledger, market,
-               portfolio, scoring, universe)
+               portfolio, scoring, stops, universe)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 LOGGER = logging.getLogger(__name__)
@@ -244,8 +244,13 @@ def api_reconcile():
     mark any decision whose horizon has now elapsed (#33)."""
     conn = db.connect()
     try:
-        out = ledger.reconcile(conn, config.mode(), market.tickers(config.PAIRS))
-        return {**out, "scoring": scoring.grade(conn)}
+        prices = market.tickers(config.PAIRS)
+        # Order matters: claim any fired stop as a SALE before reconcile gets a look
+        # at the drift, or the sale is silently absorbed and then double-booked by
+        # the next cycle's sync (#35).
+        fired = stops.sync(conn, config.mode(), prices)
+        out = ledger.reconcile(conn, config.mode(), prices)
+        return {**out, "stops_fired": fired, "scoring": scoring.grade(conn)}
     finally:
         conn.close()
 
@@ -498,9 +503,34 @@ def api_state():
                 "benchmark": ledger.bench_value(conn, config.mode(), prices),
                 "standings": arms.standings(conn, config.mode(), prices),
                 "calibration": scoring.calibration(conn, config.mode()),
+                "stops": stops.open_stops(conn, config.mode()),
                 "equity_curve": list(reversed(curve)),
                 "trips": trips[:15], "trip_stats": ledger.trip_stats(trips),
                 "decisions": decisions, "skims": skims}
+    finally:
+        conn.close()
+
+
+@app.get("/api/stops")
+def api_stops():
+    """Resting stop-losses. In live mode these are real orders sitting at Kraken."""
+    conn = db.connect()
+    try:
+        return {"enabled": config.STOP_LOSS_ENABLED,
+                "open": stops.open_stops(conn, config.mode()),
+                "note": "a HALT does not cancel resting stops — they are protective, and "
+                        "cancelling them would leave positions naked while trading is paused. "
+                        "POST /api/stops/cancel to clear them deliberately."}
+    finally:
+        conn.close()
+
+
+@app.post("/api/stops/cancel")
+def api_stops_cancel():
+    """Deliberately clear every resting stop (they are NOT cleared by a halt)."""
+    conn = db.connect()
+    try:
+        return {"cancelled": stops.cancel_all(conn, config.mode())}
     finally:
         conn.close()
 
@@ -555,6 +585,13 @@ def dashboard():
 Shadow arms trade the same market in simulation — same sleeves, same fees, no real orders.
 Fills assume the maker limit fills, so they run mildly optimistic vs the live bot's slippage.
 Arms with a shorter record are not yet comparable — mind the "since" column.</p></div>
+<div class="card" id="stops-card" hidden><div class="dim">Resting stop-losses
+<span class="dim" id="stops-note" style="float:right;font-size:.75rem"></span></div>
+<table id="stops"></table>
+<p class="dim" style="font-size:.72rem;margin:.6rem 0 0;line-height:1.45">
+These sit <b>at the exchange</b>, so they protect the position even when the bot is
+offline — between cycles, through an outage, while you sleep. A HALT does not cancel
+them (that would leave positions naked); clear them deliberately with POST /api/stops/cancel.</p></div>
 <div class="card" id="cal-card" hidden><div class="dim">Was it right?
 <span class="dim" id="cal-head" style="float:right"></span></div>
 <table id="cal"></table>
@@ -670,6 +707,19 @@ async function load(){
           `<td class="dim">${(r.since || '').slice(0, 10)}</td></tr>`;
       }).join('');
   } else { bc.hidden = true; }
+  // resting stops — real orders at the exchange, so show them plainly (#35)
+  const st = s.stops || [];
+  const sc = document.getElementById('stops-card');
+  if (st.length) {
+    sc.hidden = false;
+    document.getElementById('stops-note').textContent = `${st.length} resting at the exchange`;
+    document.getElementById('stops').innerHTML =
+      '<tr><th>sleeve</th><th>pair</th><th>stop</th><th>below entry</th><th>placed</th></tr>' +
+      st.map(x => `<tr><td>${x.sleeve}</td><td>${x.pair}</td>` +
+        `<td>${CCY}${x.stop_price.toFixed(2)}</td>` +
+        `<td class="down">−${x.pct.toFixed(1)}%</td>` +
+        `<td class="dim">${(x.placed_at || '').slice(0, 10)}</td></tr>`).join('');
+  } else { sc.hidden = true; }
   // calibration: is the brain right, and does its confidence mean anything? (#33)
   const cal = s.calibration;
   const cc = document.getElementById('cal-card');

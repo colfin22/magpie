@@ -25,7 +25,7 @@ import logging
 import random
 from datetime import datetime, timezone
 
-from . import config, db, ledger, portfolio, sleeves
+from . import config, db, ledger, portfolio, sleeves, stops
 
 LOGGER = logging.getLogger(__name__)
 
@@ -245,6 +245,7 @@ def run_all(conn, primary_mode: str, due_now: list[str], prices: dict,
     for arm in enabled():
         try:
             ensure_seeded(conn, arm, primary_mode)
+            stops.sync(conn, arm["mode"], prices)   # simulated stops, same rules as the real bot
             for s in due_now:
                 results.append(run_sleeve(conn, arm, s, prices, market_data, rng))
             portfolio.skim_profits(conn, arm["mode"], prices)

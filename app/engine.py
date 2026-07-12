@@ -4,7 +4,7 @@ import logging
 import os
 from datetime import datetime, timedelta, timezone
 
-from . import advisor, arms, config, db, ha, ledger, market, portfolio, scoring, sleeves
+from . import advisor, arms, config, db, ha, ledger, market, portfolio, scoring, sleeves, stops
 
 LOGGER = logging.getLogger(__name__)
 
@@ -72,7 +72,8 @@ def run_sleeve(conn, mode: str, sleeve: str, prices: dict, market_data: list[dic
     decision_id = _record(conn, mode, sleeve, "pending", prompt=prompt, raw=raw, decision=decision)
     try:
         order = portfolio.execute(conn, mode, sleeve, decision_id, decision["action"],
-                                  decision["pair"], decision["fraction"], prices)
+                                  decision["pair"], decision["fraction"], prices,
+                                  stop_pct=decision.get("stop_loss_pct"))
     except Exception as e:  # noqa: BLE001 - a rejected order must never kill the loop
         conn.execute("UPDATE decisions SET status='error', detail=? WHERE id=?",
                      (str(e), decision_id))
@@ -109,8 +110,15 @@ def run_cycle(now=None) -> dict:
     mode = config.mode()
     try:
         if db.get_setting(conn, "halted") == "1":
+            # A halt stops the bot TRADING; it does not cancel the resting stops, so
+            # one can still fire while halted — and the books must say so (#35).
+            fired = []
+            try:
+                fired = stops.sync(conn, mode, market.tickers(config.PAIRS))
+            except Exception as e:  # noqa: BLE001 - a halted cycle must still return cleanly
+                LOGGER.warning("stop sync failed during halt: %s", e)
             _record(conn, mode, "", "halted", "kill switch is on")
-            return {"status": "halted"}
+            return {"status": "halted", "stops_fired": fired}
 
         # a fresh cash deposit on the exchange is split across the active sleeves
         topup = None
@@ -126,6 +134,14 @@ def run_cycle(now=None) -> dict:
 
         due_now = [s for s in sleeves.ALL if sleeves.due(s, now)]
         prices, market_data, extras = _market_context(conn, "swing" in due_now)
+
+        # Did a stop fire while we were away? Make the books honest BEFORE the brain
+        # is asked anything — it must not reason about coins it no longer owns (#35).
+        fired = stops.sync(conn, mode, prices)
+        for f in fired:
+            ha.notify(f"Magpie stop-loss fired [{f['sleeve']}]",
+                      f"sold {f['pair']} at {f['price']:.2f} — "
+                      f"{config.symbol()}{f['proceeds_eur']} back in cash")
 
         results = [run_sleeve(conn, mode, s, prices, market_data, extras)
                    for s in due_now]
@@ -145,7 +161,8 @@ def run_cycle(now=None) -> dict:
         db.set_setting(conn, "last_cycle_at", _now())
         _note_retry_state(conn, results, fresh_cycle=True)
         return {"status": "ok", "mode": mode, "topup": topup, "results": results,
-                "skims": skims, "total_eur": ov["total_eur"], "arms": arm_results}
+                "skims": skims, "total_eur": ov["total_eur"], "arms": arm_results,
+                "stops_fired": fired}
     except Exception:
         _track_cycle_outcome(conn, [], crashed=True)
         raise

@@ -44,6 +44,14 @@ CREATE TABLE IF NOT EXISTS snapshots (
     at TEXT NOT NULL, mode TEXT NOT NULL, sleeve TEXT NOT NULL DEFAULT '',
     total_eur REAL NOT NULL, holdings TEXT NOT NULL, prices TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS stops (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    mode TEXT NOT NULL, sleeve TEXT NOT NULL, pair TEXT NOT NULL,
+    amount REAL NOT NULL, stop_price REAL NOT NULL, entry_price REAL NOT NULL, pct REAL NOT NULL,
+    exchange_id TEXT,                       -- the resting order at Kraken (live only)
+    placed_at TEXT NOT NULL, closed_at TEXT, fill_price REAL,
+    status TEXT NOT NULL                    -- open | filled | cancelled
+);
 CREATE TABLE IF NOT EXISTS scores (
     decision_id INTEGER PRIMARY KEY,   -- one mark per decision, graded once
     at TEXT NOT NULL, graded_at TEXT NOT NULL,

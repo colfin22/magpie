@@ -64,10 +64,17 @@ Market context:
 Your recent decisions and trades (most recent first):
 {history}
 
+{stops}
 Answer with ONLY a JSON object, no other text:
 {{"action": "buy" | "sell" | "hold", "pair": "<pair or null>",
-  "fraction": <0.0-1.0 or null>, "confidence": <0.0-1.0>,
+  "fraction": <0.0-1.0 or null>, "confidence": <0.0-1.0>,{stop_field}
   "reasoning": "<one or two sentences>"}}"""
+
+STOP_BLOCK = """
+Stop-losses are ON. When you BUY you may add "stop_loss_pct": how far below your entry
+a protective sell should rest AT THE EXCHANGE, so it protects the position even if this
+bot is offline. It is clamped to {lo:.0f}-{hi:.0f}% (default {dflt:.0f}%). Set it from the
+asset's own volatility: too tight and ordinary noise stops you out for a certain loss."""
 
 
 class AdvisorError(RuntimeError):
@@ -77,6 +84,11 @@ class AdvisorError(RuntimeError):
 def build_prompt(portfolio: dict, market_data: list[dict], history: list[dict],
                  min_order: float, mandate: str = "", lessons: str = "",
                  extras: dict | None = None) -> str:
+    stops_block = stop_field = ""
+    if config.STOP_LOSS_ENABLED:   # unmentioned, and so unchanged, when off
+        stops_block = STOP_BLOCK.format(lo=config.STOP_LOSS_MIN_PCT, hi=config.STOP_LOSS_MAX_PCT,
+                                        dflt=config.STOP_LOSS_PCT)
+        stop_field = '\n  "stop_loss_pct": <number or null>,'
     lessons_block = ""
     if lessons:
         lessons_block = ("\nLessons from your own past performance (a monthly "
@@ -91,6 +103,7 @@ def build_prompt(portfolio: dict, market_data: list[dict], history: list[dict],
         portfolio=json.dumps(portfolio, indent=1),
         market=json.dumps(market_data, indent=1),
         extras=json.dumps(extras, indent=1) if extras else "(none)",
+        stops=stops_block, stop_field=stop_field,
         history=json.dumps(history, indent=1) if history else "(none yet)")
 
 
@@ -252,4 +265,12 @@ def validate(raw: str) -> dict:
             raise AdvisorError(f"fraction {fraction} outside (0, 1]")
         out["pair"] = pair
         out["fraction"] = fraction
+        # optional: the model's proposed stop distance. Junk here is ignored rather
+        # than fatal (stops.clamp_pct falls back to the configured default) — an
+        # otherwise good decision should not be thrown away over a garnish field.
+        try:
+            pct = d.get("stop_loss_pct")
+            out["stop_loss_pct"] = float(pct) if pct is not None else None
+        except (TypeError, ValueError):
+            out["stop_loss_pct"] = None
     return out
