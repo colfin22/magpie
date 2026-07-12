@@ -102,6 +102,14 @@ TAKER_FEE = float(os.environ.get("TAKER_FEE", "0.004"))   # market-order fee (fa
 MAKER_FEE = float(os.environ.get("MAKER_FEE", "0.0025"))  # post-only limit fee (preferred fills)
 LIMIT_FILL_WAIT_S = int(os.environ.get("LIMIT_FILL_WAIT_S", "90"))  # patience before falling back to market
 
+# richer decision context (#34). Funding + open interest come from Kraken's PUBLIC
+# futures book — read-only sentiment, the bot stays spot-only and never trades a perp.
+# News is OFF unless you give it a feed: headlines are the one source that can make an
+# LLM's decisions worse, so treat it as an experiment (A/B it with a shadow arm).
+CONTEXT_FUNDING = os.environ.get("CONTEXT_FUNDING", "true").lower() == "true"
+CONTEXT_DEPTH = os.environ.get("CONTEXT_DEPTH", "true").lower() == "true"
+NEWS_RSS_URL = os.environ.get("NEWS_RSS_URL", "")
+
 # shadow arms: rival strategies traded in simulation for comparison (#31).
 # `name:kind:spec`, comma-separated, e.g. "ema:rule:ema20,coinflip:rule:random".
 # Empty = off, and the live path is untouched.
@@ -155,6 +163,7 @@ EDITABLE = {
     "DYNAMIC_UNIVERSE_ENABLED": "bool", "DYNAMIC_TOP_N": "int",
     "DYNAMIC_SELL_FLOOR_N": "int",
     "SHADOW_ARMS": "str",
+    "CONTEXT_FUNDING": "bool", "CONTEXT_DEPTH": "bool", "NEWS_RSS_URL": "str",
     "DASHBOARD_USER": "str", "DASHBOARD_PASSWORD": "str",
 }
 SECRET_KEYS = {"GEMINI_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY",

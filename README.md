@@ -268,6 +268,28 @@ slippage.
 
 Empty (the default) = no arms, and not one line of the live path changes.
 
+## What the brain sees (context)
+
+Alongside candles, EMA/RSI/returns, the live spread and the Fear & Greed index, the bot is
+given:
+
+| source | what it is | default |
+|---|---|---|
+| **Perp funding + open interest** | What longs are paying shorts to hold their position on Kraken's public futures book. Persistently positive funding means the crowd is leveraged long — a classic warning. Kraken quotes funding *absolute*, so it is normalised against the mark price. | on |
+| **Order-book depth** | Resting bid vs ask size within 1% of mid. A short-horizon signal, most useful to the swing sleeve. | on |
+| **News headlines** | Any RSS feed, via `NEWS_RSS_URL`. | **off** |
+
+The funding and open-interest numbers are **read-only sentiment**: the bot looks at the
+perpetuals market without ever trading it, and stays spot-only and long-only. No API key,
+no new risk.
+
+News is off by default and deliberately so. Crypto headlines are mostly noise and shilling,
+and an LLM is suggestible — this is the one context source that can plausibly make decisions
+*worse*. If you switch it on, A/B it with a shadow arm rather than assuming it helped.
+
+Every source is optional garnish: a dead feed leaves its key out of the prompt and never
+fails a cycle.
+
 ## Was it right? (decision scoring)
 
 Every buy and sell the bot makes is a falsifiable claim about direction, and it states a

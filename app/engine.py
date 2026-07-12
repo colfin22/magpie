@@ -163,6 +163,15 @@ def _market_context(conn, include_swing_4h: bool):
     market_data = [market.summary(conn, p) for p in config.PAIRS]
     extras = {"fear_greed_index": market.fear_greed(),
               "orderbook_touch": {p: market.touch(p) for p in config.PAIRS}}
+    # every one of these is optional garnish: a dead feed leaves its key absent
+    # from extras (or None) and must never fail a cycle (#34)
+    if config.CONTEXT_FUNDING:
+        extras["perp_funding_and_open_interest"] = market.funding(config.PAIRS)
+    if config.CONTEXT_DEPTH:
+        extras["orderbook_depth"] = {p: market.depth(p) for p in config.PAIRS}
+    news = market.headlines()
+    if news:
+        extras["recent_headlines"] = news
     return prices, market_data, extras
 
 

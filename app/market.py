@@ -1,6 +1,7 @@
 """Market data + indicators. Public Kraken endpoints via ccxt — no API key
 needed for anything in this module, so paper mode runs without an account."""
 import logging
+import re
 from datetime import datetime, timezone
 
 import ccxt
@@ -72,6 +73,106 @@ def fear_greed() -> dict | None:
                               "label": rows[1]["value_classification"]}}
     except Exception as e:  # noqa: BLE001 - strictly optional garnish
         LOGGER.info("fear/greed unavailable: %s", e)
+        return None
+
+
+# ---------- richer context (#34): what the derivatives market thinks ----------
+# All of this is READ-ONLY sentiment. The bot stays spot-only and long-only; we
+# look at the perpetuals market without ever trading it.
+
+FUTURES_TICKERS = "https://futures.kraken.com/derivatives/api/v3/tickers"
+SPOT_TO_FUTURES_BASE = {"BTC": "XBT"}   # Kraken calls bitcoin XBT on the futures book
+
+
+def _fut_base(pair: str) -> str:
+    b = pair.split("/")[0]
+    return SPOT_TO_FUTURES_BASE.get(b, b)
+
+
+def funding(pairs: list[str]) -> dict | None:
+    """Perp funding rate + open interest per pair. None on any failure.
+
+    Funding is the price longs pay shorts to hold their position: persistently
+    positive means the crowd is leveraged long, which is a classic warning the
+    bot could not see before. Kraken quotes funding as an ABSOLUTE rate, so it
+    is normalised against the mark price here — otherwise the number is
+    meaningless across assets of different prices.
+    """
+    try:
+        r = httpx.get(FUTURES_TICKERS, timeout=10)
+        r.raise_for_status()
+        by_base = {}
+        for t in r.json().get("tickers", []):
+            if t.get("tag") != "perpetual" or not t.get("symbol", "").startswith("PF_"):
+                continue
+            base = (t.get("pair") or "").split(":")[0]
+            if base:
+                by_base[base] = t
+        out = {}
+        for pair in pairs:
+            t = by_base.get(_fut_base(pair))
+            mark = float(t.get("markPrice") or 0) if t else 0
+            if not t or not mark:
+                continue
+            out[pair] = {
+                "funding_rate_pct_per_hour": round(float(t.get("fundingRate") or 0) / mark * 100, 5),
+                "predicted_funding_pct_per_hour":
+                    round(float(t.get("fundingRatePrediction") or 0) / mark * 100, 5),
+                "open_interest": float(t.get("openInterest") or 0),
+                "note": "positive funding = leveraged longs are paying to stay in "
+                        "(crowded long); negative = crowded short",
+            }
+        return out or None
+    except Exception as e:  # noqa: BLE001 - strictly optional garnish, never a failed cycle
+        LOGGER.info("funding/open-interest unavailable: %s", e)
+        return None
+
+
+def depth(pair: str, band_pct: float = 1.0) -> dict | None:
+    """Resting bid vs ask size within a band of mid — who is actually there.
+
+    A short-horizon signal, useful mainly to the swing sleeve."""
+    try:
+        ob = exchange().fetch_order_book(pair, limit=100)
+        bids, asks = ob.get("bids") or [], ob.get("asks") or []
+        if not bids or not asks:
+            return None
+        mid = (bids[0][0] + asks[0][0]) / 2
+        lo, hi = mid * (1 - band_pct / 100), mid * (1 + band_pct / 100)
+        bid_sz = sum(a for p, a, *_ in bids if p >= lo)
+        ask_sz = sum(a for p, a, *_ in asks if p <= hi)
+        total = bid_sz + ask_sz
+        if not total:
+            return None
+        return {"band_pct": band_pct,
+                "bid_size": round(bid_sz, 6), "ask_size": round(ask_sz, 6),
+                "imbalance": round((bid_sz - ask_sz) / total, 3),
+                "note": "imbalance > 0 = more resting buyers than sellers within the band"}
+    except Exception as e:  # noqa: BLE001
+        LOGGER.info("depth unavailable for %s: %s", pair, e)
+        return None
+
+
+_TITLE = re.compile(r"<title>(?:<!\[CDATA\[)?(.*?)(?:\]\]>)?</title>", re.S | re.I)
+
+
+def headlines(limit: int = 10) -> list[str] | None:
+    """Recent headlines from NEWS_RSS_URL (any RSS feed). Off unless a URL is set.
+
+    Deliberately opt-in: crypto headlines are mostly noise and shilling, and an
+    LLM is suggestible — this is the one context source that can plausibly make
+    decisions WORSE, so it is something to A/B with a shadow arm, not to switch
+    on and assume is an improvement."""
+    url = getattr(config, "NEWS_RSS_URL", "") or ""
+    if not url:
+        return None
+    try:
+        r = httpx.get(url, timeout=10, follow_redirects=True)
+        r.raise_for_status()
+        titles = [t.strip() for t in _TITLE.findall(r.text)]
+        return titles[1:limit + 1] or None    # [0] is the feed's own title
+    except Exception as e:  # noqa: BLE001
+        LOGGER.info("news feed unavailable: %s", e)
         return None
 
 
