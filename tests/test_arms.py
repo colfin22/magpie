@@ -228,3 +228,17 @@ def test_standings_skips_an_unseeded_arm(monkeypatch):
         assert [r["key"] for r in arms.standings(conn, "paper", PRICES)] == ["magpie"]
     finally:
         conn.close(); os.unlink(p)
+
+
+def test_the_bot_has_a_since_date_too(monkeypatch):
+    """The since column is the guard against a short record passing for skill —
+    it must not be blank for the bot itself."""
+    monkeypatch.setattr(config, "SHADOW_ARMS", "", raising=False)
+    monkeypatch.setattr(market, "tickers", lambda pairs: PRICES)
+    conn, p = make_db()
+    try:
+        portfolio.snapshot_all(conn, "paper", PRICES)
+        bot = arms.standings(conn, "paper", PRICES)[0]
+        assert bot["key"] == "magpie" and bot["since"]
+    finally:
+        conn.close(); os.unlink(p)

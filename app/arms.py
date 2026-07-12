@@ -265,6 +265,9 @@ def _curve(conn, mode: str, limit: int = 400) -> list[dict]:
 
 
 def _entry(conn, key: str, kind: str, mode: str, prices: dict, since: str | None) -> dict:
+    if not since:   # the real bot has no seed date — its record starts at its first snapshot
+        row = conn.execute("SELECT MIN(at) a FROM snapshots WHERE mode=?", (mode,)).fetchone()
+        since = row["a"] if row else None
     ov = portfolio.overview(conn, mode, prices)
     invested = sum(v["allocated"] or 0 for v in ov["sleeves"])
     trips = ledger.round_trips(conn, mode)
