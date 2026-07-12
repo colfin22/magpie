@@ -626,7 +626,7 @@ async function load(){
   document.getElementById('halted').textContent = s.halted ? " halted — POST /api/resume to re-arm" : "";
   document.getElementById('sleeves').innerHTML = s.overview.sleeves.map(v => {
     const d = v.total_eur - v.allocated;
-    const assets = Object.keys(v.holdings).filter(k => k !== CCODE);
+    const assets = Object.keys(v.holdings).filter(k => k !== CCODE && k !== 'dust');
     return `<div class="card"><div class="dim">${v.sleeve}</div>` +
       `<div class="slv">${CCY}${v.total_eur.toFixed(2)}</div>` +
       `<div class="${d >= 0 ? 'up' : 'down'}">${d >= 0 ? '+' : ''}${d.toFixed(2)}</div>` +

@@ -339,3 +339,23 @@ def test_retry_now_stops_at_budget_but_force_overrides(monkeypatch):
         assert engine.retry_now(force=True)["status"] == "ok"   # manual override runs anyway
     finally:
         conn.close(); os.unlink(p)
+
+
+def test_unsellable_dust_is_counted_but_is_not_a_position(monkeypatch):
+    """The €0.26 of BTC that reconcile found on the real account is below every
+    exchange minimum. Left among the holdings the brain sees 'you hold BTC',
+    proposes selling it, and the order can only ever be rejected."""
+    conn, p = make_db()
+    try:
+        conn.execute("INSERT INTO holdings(mode, sleeve, asset, amount) VALUES('paper','swing','BTC',?)",
+                     (0.0000045,))       # ~€0.26 at 58k
+        conn.execute("INSERT INTO holdings(mode, sleeve, asset, amount) VALUES('paper','swing','ETH',?)",
+                     (0.01,))            # ~€30 — a real position
+        conn.commit()
+        v = portfolio.valued(conn, "paper", "swing", {"BTC/EUR": 58_000.0, "ETH/EUR": 3_000.0})
+        assert "BTC" not in v["holdings"]              # not offered to the brain as sellable
+        assert v["holdings"]["dust"]["BTC"] == 0.26    # ...but declared, not hidden
+        assert "ETH" in v["holdings"]                  # a real position is untouched
+        assert v["total_eur"] == round(16.67 + 0.26 + 30.0, 2)   # and still counted in the total
+    finally:
+        conn.close(); os.unlink(p)

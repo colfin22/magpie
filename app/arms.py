@@ -92,12 +92,18 @@ def decide_ema20(port, market_data, sleeve, rng):
 def decide_dca(port, market_data, sleeve, rng):
     """Buy a fixed slice of remaining cash into the first base pair. Never sells.
 
-    The 'do nothing clever' arm."""
+    The 'do nothing clever' arm. Because it always spends a FRACTION of what is
+    left, its slice shrinks toward zero — so once the slice is below the exchange
+    minimum it holds rather than proposing a buy that can only be rejected. Left
+    unchecked it errored on every cycle forever and junked up its own diary."""
     if not config.BASE_PAIRS:
         return None
     pair = config.BASE_PAIRS[0]
-    if port["holdings"].get(config.BASE_CURRENCY, 0) <= 0:
+    cash = port["holdings"].get(config.BASE_CURRENCY, 0)
+    if cash <= 0:
         return None
+    if cash * DCA_FRACTION < portfolio.min_order_eur(pair):
+        return None      # slice too small to be a legal order — that is a HOLD, not an error
     return {"action": "buy", "pair": pair, "fraction": DCA_FRACTION, "confidence": 0.5,
             "reasoning": f"scheduled DCA: {DCA_FRACTION:.0%} of remaining cash into {pair}"}
 

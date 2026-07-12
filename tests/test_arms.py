@@ -126,7 +126,8 @@ def test_ema20_wont_buy_into_froth_or_with_no_cash():
 
 def test_dca_buys_a_slice_and_never_sells(monkeypatch):
     monkeypatch.setattr(config, "BASE_PAIRS", ["BTC/EUR"], raising=False)
-    d = arms.decide_dca({"holdings": {"EUR": 20.0}}, [row("BTC/EUR", 100, 200)],
+    monkeypatch.setattr(portfolio, "min_order_eur", lambda pair: 10.0)
+    d = arms.decide_dca({"holdings": {"EUR": 100.0}}, [row("BTC/EUR", 100, 200)],
                         "swing", random.Random(1))
     assert d["action"] == "buy" and d["fraction"] == arms.DCA_FRACTION
     assert arms.decide_dca({"holdings": {"EUR": 0.0, "BTC": 1.0}}, [], "swing",
@@ -318,3 +319,15 @@ def test_a_rival_brains_HOLD_keeps_its_reasoning(monkeypatch):
         assert "RSI is stretched" in d["response_raw"]       # and the raw answer kept
     finally:
         conn.close(); os.unlink(p)
+
+
+def test_dca_holds_rather_than_erroring_once_its_slice_is_below_the_minimum(monkeypatch):
+    """It spends a fraction of what's LEFT, so its slice shrinks forever. Without
+    this it proposed a sub-minimum buy every cycle, which could only be rejected —
+    an error row on every cycle, for the rest of time."""
+    monkeypatch.setattr(config, "BASE_PAIRS", ["BTC/EUR"], raising=False)
+    monkeypatch.setattr(portfolio, "min_order_eur", lambda pair: 10.0)
+    fat = arms.decide_dca({"holdings": {"EUR": 100.0}}, [], "swing", random.Random(1))
+    assert fat["action"] == "buy"                                   # 20% of 100 = €20, fine
+    thin = arms.decide_dca({"holdings": {"EUR": 40.0}}, [], "swing", random.Random(1))
+    assert thin is None                                             # 20% of 40 = €8, under the min

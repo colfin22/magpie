@@ -13,6 +13,7 @@ from . import config, db, market, sleeves, stops
 
 LOGGER = logging.getLogger(__name__)
 TOPUP_EPSILON_EUR = 1.0  # ignore dust/fee drift below this when detecting deposits
+DUST_EUR = 1.0           # a holding worth less than this cannot be sold — it is not a position
 
 
 def _now() -> str:
@@ -32,15 +33,25 @@ def _set(conn, mode: str, sleeve: str, asset: str, amount: float) -> None:
 
 
 def valued(conn, mode: str, sleeve: str, prices: dict[str, float]) -> dict:
+    """Value a sleeve. Sub-€1 crumbs are counted in the total (they are real) but
+    reported separately as `dust` — they are below every exchange minimum, so they
+    cannot be sold. Left among the holdings they read as a position: the brain sees
+    "you hold BTC", proposes selling it, and the order can only ever be rejected."""
     h = holdings(conn, mode, sleeve)
     total = h.get(config.BASE_CURRENCY, 0.0)
     detail = {config.BASE_CURRENCY: round(h.get(config.BASE_CURRENCY, 0.0), 2)}
+    dust = {}
     for pair, price in prices.items():
         asset = pair.split("/")[0]
         if h.get(asset):
             value = h[asset] * price
             total += value
+            if value < DUST_EUR:
+                dust[asset] = round(value, 2)      # counted, but not a position
+                continue
             detail[asset] = {"amount": h[asset], "eur_value": round(value, 2)}
+    if dust:
+        detail["dust"] = dust
     meta = conn.execute("SELECT allocated, hwm FROM sleeve_meta WHERE mode=? AND sleeve=?",
                         (mode, sleeve)).fetchone()
     return {"sleeve": sleeve, "total_eur": round(total, 2), "holdings": detail,
