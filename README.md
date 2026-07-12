@@ -114,9 +114,13 @@ settings page — dropdown, key, **Test active brain**, save; no restart.
   is stored. The dashboard diary shows what it saw, what it thought, and what it
   did — for every cent that moves.
 
-There is deliberately **no auto-stop-loss and no position cap** — the operator
-takes the risk knowingly and holds the halt button. Add your own guardrails if
-that's not your temperament.
+- **Stop-losses, if you want them** (`STOP_LOSS_ENABLED`, off by default): a
+  protective sell rests **at the exchange**, so it still works when the bot does
+  not — see [Stop-losses](#stop-losses-optional).
+
+There is deliberately **no position cap and no circuit breaker** — no rule that
+halts the strategy after a bad run. The operator takes the risk knowingly and
+holds the halt button. Add your own guardrails if that's not your temperament.
 
 ## Run
 
@@ -172,6 +176,9 @@ Magpie runs anywhere Docker does. **On Windows — or if you're not very technic
 - `POST /api/reconcile` — absorb drift between the sleeve books and exchange reality
 - `GET /settings` — a page to enter/change keys and Home Assistant details (secrets masked; test buttons for each integration). Web-entered settings persist and override the env.
 - `POST /api/halt` / `POST /api/resume` — the only human controls
+- `GET /api/arms` — the leaderboard: the bot, every shadow arm, and the phantom hodler
+- `GET /api/stops` — resting stop-losses (real orders at the exchange, in live mode)
+- `POST /api/stops/cancel` — clear every resting stop (a halt deliberately does *not*)
 - `POST /api/topup?amount=` — paper mode only; live deposits are auto-detected
 
 ## Configuration
@@ -193,6 +200,13 @@ Everything else is env vars — see [`.env.example`](.env.example). Notables:
 `LLM_MODEL` / `LLM_MODEL_DEEP` (optional model overrides), `PAIRS` (the base
 tradeable universe, default BTC/EUR + ETH/EUR), and `SKIM_FRACTION` (profit share
 skimmed to the vault, default 0.5).
+
+The features below are all **off unless you turn them on**:
+`SHADOW_ARMS` (rival strategies traded in simulation — [shadow arms](#shadow-arms-optional)),
+`STOP_LOSS_ENABLED` ([stop-losses](#stop-losses-optional)),
+`CONTEXT_FUNDING` / `CONTEXT_DEPTH` / `NEWS_RSS_URL` ([what the brain sees](#what-the-brain-sees-context)),
+and `DYNAMIC_UNIVERSE` / `DYNAMIC_TOP_N` / `DYNAMIC_SELL_FLOOR_N`
+([dynamic universe](#dynamic-universe-optional)).
 
 ## Notifications
 
