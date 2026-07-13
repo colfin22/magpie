@@ -594,61 +594,179 @@ def dashboard():
 <title>Magpie</title>
 <link rel="icon" type="image/svg+xml" href="/favicon.svg">
 <style>
- body{font-family:system-ui;margin:1.5rem auto;padding:0 1rem;background:#12151c;color:#e6e9f0;max-width:980px}
- h1{font-size:1.4rem} .big{font-size:2rem;font-weight:700}
- .dim{color:#8b93a7} .card{background:#1a1f2b;border-radius:10px;padding:1rem;margin:.8rem 0}
- .row{display:flex;gap:.8rem;flex-wrap:wrap} .row .card{flex:1;min-width:180px;margin:0}
- .slv{font-size:1.3rem;font-weight:700} .up{color:#4cd97b}.down{color:#ff6b6b}
- table{width:100%;border-collapse:collapse;font-size:.85rem}
- td,th{padding:.35rem .5rem;text-align:left;border-bottom:1px solid #2a3140}
- .hold{color:#8b93a7}.buy{color:#4cd97b}.sell{color:#ff6b6b}.err{color:#ffb020}
- tr.me td{background:#20283a;font-weight:700}
- .dot{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:.45rem}
- .bar td{color:#8b93a7;font-style:italic}
- button{background:#ff6b6b;color:#000;border:0;border-radius:8px;padding:.6rem 1.2rem;font-weight:700}
+ :root{
+   --bg:#0f1219; --panel:#161b26; --panel2:#1a2030; --line:#232b3b;
+   --ink:#e7ebf3; --dim:#8b93a7; --faint:#5c6478;
+   --green:#4cd97b; --greendim:#2e7d52; --red:#ff6b6b; --purple:#a78bfa; --blue:#5b8cff;
+ }
+ *{box-sizing:border-box}
+ html,body{margin:0}
+ body{background:var(--bg);color:var(--ink);
+   font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+   -webkit-font-smoothing:antialiased;padding:26px 20px 34px}
+ .wrap{max-width:1180px;margin:0 auto}
+ .head{display:flex;align-items:center;gap:14px;margin:2px 0 22px;flex-wrap:wrap}
+ .logo{font-size:30px;line-height:1}
+ .name{font-size:26px;font-weight:800;letter-spacing:-.4px}
+ .pill{font-size:11px;font-weight:800;letter-spacing:.6px;padding:4px 9px;border-radius:999px;
+   text-transform:uppercase;border:1px solid var(--line)}
+ .pill.up{color:var(--green);border-color:var(--greendim);background:rgba(76,217,123,.08)}
+ .pill.dim{color:var(--purple);border-color:#4a3f7a;background:rgba(167,139,250,.08)}
+ .pill.down{color:var(--red);border-color:#7a3f3f;background:rgba(255,107,107,.10)}
+ .spacer{flex:1}
+ .stamp{color:var(--faint);font-size:12.5px}
+ .navlink{color:var(--dim);text-decoration:none;font-size:12.5px}
+ .navlink:hover{color:var(--ink)}
+ .universe{display:flex;align-items:center;gap:7px;margin:-8px 0 20px;color:var(--dim);
+   font-size:12.5px;flex-wrap:wrap}
+ .universe .lbl{color:var(--faint);text-transform:uppercase;letter-spacing:.6px;font-size:11px;
+   font-weight:700;margin-right:2px}
+ .chip{font-size:12px;font-weight:700;padding:3px 9px;border-radius:7px;background:var(--panel2);
+   border:1px solid var(--line);color:#c7cede}
+ .card{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:22px 24px}
+ .eyebrow{color:var(--faint);font-size:11px;font-weight:800;letter-spacing:.9px;
+   text-transform:uppercase;margin:0 0 10px}
+ .cardhead{display:flex;align-items:baseline;gap:12px;margin-bottom:14px}
+ .stat{margin-left:auto;color:var(--dim);font-size:12.5px;font-weight:700;text-align:right}
+ .hero{display:grid;grid-template-columns:340px 1fr;gap:26px}
+ .big{font-size:52px;font-weight:800;letter-spacing:-1.5px;line-height:1;margin:2px 0 8px}
+ .dim{color:var(--dim)} .faint{color:var(--faint)}
+ .up{color:var(--green)} .down{color:var(--red)}
+ .heroline{font-size:15px;font-weight:700}
+ .sub{color:var(--dim);font-size:13.5px;line-height:1.5;margin-top:14px}
+ .sub b{color:var(--ink)}
+ .fg{margin-top:12px;color:var(--dim);font-size:13px}
+ .charthead{display:flex;align-items:center;gap:18px;font-size:12.5px;color:var(--dim);
+   margin-bottom:6px;flex-wrap:wrap}
+ .charthead .k{display:flex;align-items:center;gap:6px}
+ .swatch{width:16px;height:3px;border-radius:2px;display:inline-block}
+ .chartmeta{margin-left:auto;color:var(--faint)}
+ .grid4{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:16px;margin-top:16px}
+ .sleeve .top{display:flex;justify-content:space-between;align-items:flex-start;gap:8px}
+ .badge{font-size:12px;font-weight:800;padding:3px 8px;border-radius:7px;white-space:nowrap}
+ .badge.up{background:rgba(76,217,123,.12)} .badge.down{background:rgba(255,107,107,.12)}
+ .sleeve .val{font-size:30px;font-weight:800;letter-spacing:-.8px;margin:12px 0 4px}
+ .sleeve .desc{color:var(--dim);font-size:12.5px;min-height:18px}
+ /* flex, not grid: a hidden card (nothing graded yet, no stops) must leave no dead
+    column behind — the surviving card takes the full width */
+ .row2{display:flex;gap:16px;margin-top:16px;flex-wrap:wrap}
+ .row2>*{flex:1 1 320px} .row2>*:first-child{flex:1.35 1 380px}
+ .full{margin-top:16px}
+ table{width:100%;border-collapse:collapse}
+ th{color:var(--faint);font-size:10.5px;font-weight:800;letter-spacing:.7px;text-transform:uppercase;
+   text-align:left;padding:0 10px 10px 0}
+ td{padding:9px 10px 9px 0;font-size:13px;border-top:1px solid var(--line)}
+ .tp{text-align:right} thead th.tp{text-align:right}
+ .mono{font-variant-numeric:tabular-nums}
+ .tag{color:var(--dim);font-size:12.5px;font-weight:600}
+ .slv{font-weight:700;font-size:12.5px}
+ .note{color:var(--faint);font-size:12px;margin:12px 0 0;line-height:1.55}
+ .note b{color:var(--dim)}
+ .lessons{margin-top:20px;border-top:1px solid var(--line);padding-top:16px}
+ .lessons .lbl{color:var(--faint);font-size:10.5px;font-weight:800;letter-spacing:.7px;
+   text-transform:uppercase}
+ .lessons p{color:#c7cede;font-size:13px;line-height:1.6;margin:8px 0 0;font-style:italic}
+ .dec td{padding:13px 10px 13px 0;vertical-align:top}
+ .dec .why{color:var(--dim);font-size:12.5px;line-height:1.5;max-width:560px}
+ .act{font-weight:800;font-size:13px}
+ .act.hold,.hold{color:var(--dim)} .act.buy,.buy{color:var(--green)}
+ .act.sell,.sell{color:var(--blue)} .act.err,.err{color:#ffb020}
+ .when{color:var(--faint);font-size:12px;white-space:nowrap}
+ tr.me td{background:rgba(76,217,123,.06)}
+ tr.bar td{color:var(--dim);font-style:italic}
+ .dot{display:inline-block;width:10px;height:3px;border-radius:2px;margin-right:8px;
+   vertical-align:middle}
+ button{background:var(--red);color:#000;border:0;border-radius:10px;padding:.7rem 1.3rem;
+   font-weight:800;cursor:pointer}
+ @media(max-width:900px){.hero,.row2{grid-template-columns:1fr}}
 </style></head><body>
-<h1>🐦‍⬛ Magpie <span class="dim" id="mode"></span> <span class="dim" id="ver" style="font-size:.8rem"></span>
-<span style="float:right;font-size:.8rem"><a href="/settings" style="color:#8b93a7;text-decoration:none">⚙ settings</a>
-<a href="#" onclick="fetch('/logout',{method:'POST'}).then(()=>location='/login');return false" style="color:#8b93a7;text-decoration:none;margin-left:12px">⎋ log out</a>
-<span class="dim" id="updated" style="margin-left:12px"></span></span></h1>
-<div class="card"><div class="dim">Total portfolio <span id="nextcheck" style="float:right"></span></div>
-<div class="big" id="equity">…</div>
-<div id="pnl" style="font-weight:600"></div>
-<div id="vs" class="dim" style="margin-top:.6rem;padding-top:.6rem;border-top:1px solid #2a3140;line-height:1.5"></div>
-<svg id="chart" viewBox="0 0 600 120" preserveAspectRatio="none"
-     style="width:100%;height:120px;margin-top:.5rem"></svg></div>
-<div class="row" id="sleeves"></div>
-<div class="card" id="board-card" hidden><div class="dim">Leaderboard
-<span class="dim" id="board-note" style="float:right;font-size:.75rem"></span></div>
-<table id="board"></table>
-<p class="dim" style="font-size:.72rem;margin:.6rem 0 0;line-height:1.45">
-Shadow arms trade the same market in simulation — same sleeves, same fees, no real orders.
-Fills assume the maker limit fills, so they run mildly optimistic vs the live bot's slippage.
-Arms with a shorter record are not yet comparable — mind the "since" column.</p></div>
-<div class="card" id="stops-card" hidden><div class="dim">Resting stop-losses
-<span class="dim" id="stops-note" style="float:right;font-size:.75rem"></span></div>
-<table id="stops"></table>
-<p class="dim" style="font-size:.72rem;margin:.6rem 0 0;line-height:1.45">
-These sit <b>at the exchange</b>, so they protect the position even when the bot is
-offline — between cycles, through an outage, while you sleep. A HALT does not cancel
-them (that would leave positions naked); clear them deliberately with POST /api/stops/cancel.</p></div>
-<div class="card" id="cal-card" hidden><div class="dim">Was it right?
-<span class="dim" id="cal-head" style="float:right"></span></div>
-<table id="cal"></table>
-<p class="dim" style="font-size:.72rem;margin:.6rem 0 0;line-height:1.45">
-Every buy/sell is a falsifiable claim about direction, graded at its sleeve's horizon
-(swing 3d, fortnight 10d, quarter 90d) against the price that actually happened. Holds
-make no claim and are not graded. The question is not only whether it beats 50%, but
-whether its <b>confident</b> calls land better than its unsure ones — if they don't,
-the confidence is decoration.</p></div>
-<div class="card"><div class="dim">Closed trades <span id="tstats" style="float:right"></span></div><table id="trades"></table></div>
-<div class="card" id="lessons-card" hidden><div class="dim" id="lessons-when"></div>
-<p class="dim" id="lessons-text" style="font-size:.85rem;line-height:1.55;margin:.4rem 0 0"></p></div>
-<div class="card"><div class="dim">Recent decisions — <b style="color:#e6e9f0">magpie only</b>
-<span class="dim" style="float:right;font-size:.75rem">last 24 hours · the shadow arms have their own books (see the leaderboard)</span></div>
-<table id="log"></table></div>
-<div class="card"><button onclick="if(confirm('Halt all trading?'))fetch('/api/halt',{method:'POST'}).then(()=>load())">⛔ HALT TRADING</button>
-<span class="dim" id="halted"></span></div>
+<div class="wrap">
+
+<div class="head">
+  <span class="logo">🐦‍⬛</span>
+  <span class="name">Magpie</span>
+  <span class="pill" id="mode"></span>
+  <span class="spacer"></span>
+  <span class="stamp" id="ver"></span>
+  <span class="stamp" id="updated"></span>
+  <a class="navlink" href="/settings">⚙ settings</a>
+  <a class="navlink" href="#"
+     onclick="fetch('/logout',{method:'POST'}).then(()=>location='/login');return false">⎋ log out</a>
+</div>
+
+<div class="universe" id="universe" hidden></div>
+
+<div class="card hero">
+  <div>
+    <p class="eyebrow">Total portfolio</p>
+    <div class="big" id="equity">…</div>
+    <div class="heroline" id="pnl"></div>
+    <div class="sub" id="vs"></div>
+    <div class="fg" id="nextcheck"></div>
+  </div>
+  <div>
+    <div class="charthead" id="chartlegend"></div>
+    <svg id="chart" viewBox="0 0 760 300" preserveAspectRatio="none"
+         style="width:100%;height:300px"></svg>
+  </div>
+</div>
+
+<div class="grid4" id="sleeves"></div>
+
+<div class="card full" id="board-card" hidden>
+  <div class="cardhead"><span class="eyebrow" style="margin:0">Leaderboard</span>
+    <span class="stat" id="board-note"></span></div>
+  <table id="board"></table>
+  <p class="note">
+  Shadow arms trade the same market in simulation — same sleeves, same fees, no real orders.
+  Fills assume the maker limit fills, so they run mildly optimistic vs the live bot's slippage.
+  Arms with a shorter record are not yet comparable — mind the "since" column.</p></div>
+
+<div class="row2">
+  <div class="card" id="cal-card" hidden>
+    <div class="cardhead"><span class="eyebrow" style="margin:0">Was it right?</span>
+      <span class="stat" id="cal-head"></span></div>
+    <table id="cal"></table>
+    <p class="note">
+    Every buy/sell is a falsifiable claim about direction, graded at its sleeve's horizon
+    (swing 3d, fortnight 10d, quarter 90d) against the price that actually happened. Holds
+    make no claim and are not graded. The question is not only whether it beats 50%, but
+    whether its <b>confident</b> calls land better than its unsure ones — if they don't,
+    the confidence is decoration.</p></div>
+  <div class="card" id="stops-card" hidden>
+    <div class="cardhead"><span class="eyebrow" style="margin:0">Resting stop-losses</span>
+      <span class="stat" id="stops-note"></span></div>
+    <table id="stops"></table>
+    <p class="note">
+    These sit <b>at the exchange</b>, so they protect the position even when the bot is
+    offline — between cycles, through an outage, while you sleep. A HALT does not cancel
+    them (that would leave positions naked); clear them deliberately with POST /api/stops/cancel.</p></div>
+</div>
+
+<div class="row2">
+  <div class="card">
+    <div class="cardhead"><span class="eyebrow" style="margin:0">Closed trades</span>
+      <span class="stat" id="tstats"></span></div>
+    <table id="trades"></table></div>
+  <div class="card">
+    <p class="eyebrow">Vault skims</p>
+    <table id="skims"></table>
+    <div class="lessons" id="lessons-card" hidden>
+      <span class="lbl" id="lessons-when"></span>
+      <p id="lessons-text"></p></div>
+  </div>
+</div>
+
+<div class="card full">
+  <div class="cardhead"><span class="eyebrow" style="margin:0">Recent decisions — magpie only</span>
+    <span class="stat">last 24 hours · the shadow arms have their own books</span></div>
+  <table id="log" class="dec"></table></div>
+
+<div class="card full">
+  <button onclick="if(confirm('Halt all trading?'))fetch('/api/halt',{method:'POST'}).then(()=>load())">⛔ HALT TRADING</button>
+  <span class="dim" id="halted"></span></div>
+
+</div>
 <script>
 async function load(){
   const s = await (await fetch('/api/state', {cache: 'no-store'})).json();
@@ -671,17 +789,28 @@ async function load(){
       ` · in ${Math.floor(mins / 60)}h ${mins % 60}m`;
   }
   const modeEl = document.getElementById('mode');
-  modeEl.textContent = `(${s.mode}${s.halted ? " — HALTED" : ""})`;
-  modeEl.className = s.halted ? 'down' : (s.mode === 'live' ? 'up' : 'dim');
+  modeEl.textContent = s.halted ? `${s.mode} — halted` : s.mode;
+  // .pill must survive: the class carries the shape, the state word carries the colour
+  modeEl.className = 'pill ' + (s.halted ? 'down' : (s.mode === 'live' ? 'up' : 'dim'));
   document.getElementById('equity').textContent = `${CCY}${s.overview.total_eur.toFixed(2)}`;
   document.getElementById('halted').textContent = s.halted ? " halted — POST /api/resume to re-arm" : "";
+  // the traded universe is just the configured pairs — no invented "new this week" markers
+  const uni = Object.keys(s.prices || {}).map(p => p.split('/')[0]);
+  const uEl = document.getElementById('universe');
+  if (uni.length) {
+    uEl.hidden = false;
+    uEl.innerHTML = '<span class="lbl">Universe</span>' +
+      uni.map(a => `<span class="chip">${a}</span>`).join('');
+  } else { uEl.hidden = true; }
   document.getElementById('sleeves').innerHTML = s.overview.sleeves.map(v => {
     const d = v.total_eur - v.allocated;
     const assets = Object.keys(v.holdings).filter(k => k !== CCODE && k !== 'dust');
-    return `<div class="card"><div class="dim">${v.sleeve}</div>` +
-      `<div class="slv">${CCY}${v.total_eur.toFixed(2)}</div>` +
-      `<div class="${d >= 0 ? 'up' : 'down'}">${d >= 0 ? '+' : ''}${d.toFixed(2)}</div>` +
-      `<div class="dim">${assets.length ? assets.join(', ') : 'in cash'}</div></div>`;
+    return `<div class="card sleeve">` +
+      `<div class="top"><span class="eyebrow" style="margin:0">${v.sleeve}</span>` +
+      `<span class="badge ${d >= 0 ? 'up' : 'down'}">${d >= 0 ? '+' : '−'}${CCY}${Math.abs(d).toFixed(2)}</span></div>` +
+      `<div class="val">${CCY}${v.total_eur.toFixed(2)}</div>` +
+      `<div class="desc">${assets.length
+        ? `holding <b style="color:#c7cede">${assets.join(', ')}</b>` : 'in cash'}</div></div>`;
   }).join('');
   // hero: P/L on invested + the vs-hodl sentence (#9)
   const invested = s.overview.sleeves.reduce((a, v) => a + (v.allocated || 0), 0);
@@ -690,7 +819,7 @@ async function load(){
   pnlEl.textContent = invested > 0
     ? `${pnl >= 0 ? '+' : '−'}${CCY}${Math.abs(pnl).toFixed(2)} (${(pnl / invested * 100).toFixed(1)}%) on ${CCY}${invested.toFixed(2)} invested`
     : '';
-  pnlEl.className = pnl >= 0 ? 'up' : 'down';
+  pnlEl.className = 'heroline ' + (pnl >= 0 ? 'up' : 'down');
   const vsEl = document.getElementById('vs');
   if (s.benchmark) {
     const edge = s.overview.total_eur - s.benchmark.hodl_eur;
@@ -709,8 +838,11 @@ async function load(){
   // equity chart — the bot plus every shadow arm, on one shared scale (#32).
   // x is mapped by TIME, not by index: arms started on different days and have
   // curves of different lengths, so index-mapping would silently lie.
-  const COLOURS = {magpie: '#4cd97b', hodl: '#ffb020'};
-  const PALETTE = ['#6aa9ff', '#c792ea', '#ff8fa3', '#5ad1c5'];
+  const COLOURS = {magpie: '#4cd97b', hodl: '#a78bfa'};
+  // one colour per arm — the palette must outlast the arm list or two rivals
+  // share a colour on the chart and the legend stops meaning anything
+  const PALETTE = ['#5b8cff', '#c792ea', '#ff8fa3', '#5ad1c5', '#ffb020', '#8b93a7', '#e07be0'];
+  const NAMES = {magpie: 'Magpie', hodl: 'Buy & hold', coinflip: 'Coin flip'};
   const board = s.standings || [];
   let ci = 0;
   board.forEach(r => { if (!COLOURS[r.key]) COLOURS[r.key] = PALETTE[ci++ % PALETTE.length]; });
@@ -720,19 +852,60 @@ async function load(){
   if (!series.length && legacy.length > 1) {
     series.push({key: 'magpie', pts: legacy.map(p => ({x: Date.parse(p.t + 'Z'), y: p.eur}))});
   }
+  // plot box inside the 760x300 viewBox — the gutter on the left is the price axis,
+  // the strip at the bottom is the date axis
+  const X0 = 40, X1 = 740, Y0 = 20, Y1 = 244;
+  const legEl = document.getElementById('chartlegend');
   if (series.length) {
     const all = series.flatMap(sr => sr.pts);
     const x0 = Math.min(...all.map(p => p.x)), x1 = Math.max(...all.map(p => p.x));
     const y0 = Math.min(...all.map(p => p.y)), y1 = Math.max(...all.map(p => p.y));
     const xs = (x1 - x0) || 1, ys = (y1 - y0) || 1;
-    document.getElementById('chart').innerHTML = series.map(sr => {
-      const pts = sr.pts.map(p =>
-        `${((p.x - x0) / xs * 600).toFixed(1)},${(110 - (p.y - y0) / ys * 100).toFixed(1)}`).join(' ');
-      const me = sr.key === 'magpie';
+    const px = v => X0 + (v - x0) / xs * (X1 - X0);
+    const py = v => Y1 - (v - y0) / ys * (Y1 - Y0);
+    // gridlines + price axis, labelled off the real min/max so the scale never lies
+    let svg = '';
+    for (let i = 0; i <= 4; i++) {
+      const val = y0 + ys * (i / 4), y = py(val).toFixed(1);
+      svg += `<line x1="${X0}" y1="${y}" x2="${X1}" y2="${y}" stroke="#232b3b" stroke-width="1"/>` +
+        `<text x="${X0 - 6}" y="${(+y + 4).toFixed(1)}" fill="#5c6478" font-size="11" ` +
+        `text-anchor="end">${CCY}${val.toFixed(0)}</text>`;
+    }
+    // date axis
+    for (let i = 0; i <= 3; i++) {
+      const t = x0 + xs * (i / 3);
+      svg += `<text x="${px(t).toFixed(1)}" y="262" fill="#5c6478" font-size="11" ` +
+        `text-anchor="${i === 0 ? 'start' : i === 3 ? 'end' : 'middle'}">${fmtWhen(new Date(t).toISOString(), false)}</text>`;
+    }
+    const me = series.find(sr => sr.key === 'magpie');
+    if (me) {   // soft area under the bot's own curve, so the eye finds it first
+      const path = me.pts.map(p => `${px(p.x).toFixed(1)},${py(p.y).toFixed(1)}`).join(' L');
+      svg += `<defs><linearGradient id="g" x1="0" x2="0" y1="0" y2="1">` +
+        `<stop offset="0" stop-color="#4cd97b" stop-opacity="0.30"/>` +
+        `<stop offset="1" stop-color="#4cd97b" stop-opacity="0"/></linearGradient></defs>` +
+        `<path d="M${path} L${px(me.pts[me.pts.length - 1].x).toFixed(1)},${Y1} L${px(me.pts[0].x).toFixed(1)},${Y1} Z" ` +
+        `fill="url(#g)" opacity="0.5"/>`;
+    }
+    // shadow arms first, the bot last so it draws on top
+    svg += series.slice().sort((a, b) => (a.key === 'magpie') - (b.key === 'magpie')).map(sr => {
+      const pts = sr.pts.map(p => `${px(p.x).toFixed(1)},${py(p.y).toFixed(1)}`).join(' ');
+      const mine = sr.key === 'magpie', hodl = sr.key === 'hodl';
       return `<polyline points="${pts}" fill="none" stroke="${COLOURS[sr.key] || '#8b93a7'}" ` +
-        `stroke-width="${me ? 2.5 : 1.3}" opacity="${me ? 1 : 0.75}"/>`;
+        `stroke-width="${mine ? 2.5 : 1.6}" opacity="${mine ? 1 : 0.8}"` +
+        `${hodl ? ' stroke-dasharray="6 5"' : ''}/>`;
     }).join('');
-  }
+    // end-of-curve dot + value for the bot
+    if (me) {
+      const last = me.pts[me.pts.length - 1];
+      svg += `<circle cx="${px(last.x).toFixed(1)}" cy="${py(last.y).toFixed(1)}" r="3.5" fill="#4cd97b"/>`;
+    }
+    document.getElementById('chart').innerHTML = svg;
+    legEl.innerHTML = series.map(sr =>
+      `<span class="k"><span class="swatch" style="background:${COLOURS[sr.key] || '#8b93a7'}"></span>` +
+      `${NAMES[sr.key] || sr.key}</span>`).join('') +
+      `<span class="chartmeta">${fmtWhen(new Date(x0).toISOString(), false)} → ` +
+      `${fmtWhen(new Date(x1).toISOString(), false)}</span>`;
+  } else { legEl.innerHTML = ''; }
   // leaderboard (#32) — the bot vs the control arms vs doing nothing
   const bc = document.getElementById('board-card');
   if (board.length > 1) {
@@ -741,22 +914,24 @@ async function load(){
       board.some(r => r.key === 'coinflip' || r.kind === 'random') ? 'beat the coin flip' : '';
     const BARS = {hodl: 'doing nothing', random: 'chance'};
     document.getElementById('board').innerHTML =
-      '<tr><th></th><th>equity</th><th>P/L</th><th>trades</th><th>wins</th><th>since</th></tr>' +
+      '<thead><tr><th>Strategy</th><th class="tp">Equity</th><th class="tp">P/L</th>' +
+      '<th class="tp">Trades</th><th class="tp">Wins</th><th class="tp">Since</th></tr></thead>' +
+      '<tbody class="mono">' +
       board.map(r => {
         const me = r.key === 'magpie';
         const bar = BARS[r.key] || BARS[r.kind];
         const pl = r.pnl_eur;
         return `<tr class="${me ? 'me' : (bar ? 'bar' : '')}">` +
           `<td><span class="dot" style="background:${COLOURS[r.key] || '#8b93a7'}"></span>` +
-          `${me ? 'magpie (the brain)' : r.key}` +
-          `${bar ? ` <span class="dim">— ${bar}</span>` : ''}</td>` +
-          `<td>${CCY}${r.equity_eur.toFixed(2)}</td>` +
-          `<td class="${pl >= 0 ? 'up' : 'down'}">${pl >= 0 ? '+' : '−'}${CCY}${Math.abs(pl).toFixed(2)}` +
+          `${me ? '<b>magpie (the brain)</b>' : r.key}` +
+          `${bar ? ` <span class="tag">— ${bar}</span>` : ''}</td>` +
+          `<td class="tp">${me ? '<b>' : ''}${CCY}${r.equity_eur.toFixed(2)}${me ? '</b>' : ''}</td>` +
+          `<td class="tp ${pl >= 0 ? 'up' : 'down'}">${pl >= 0 ? '+' : '−'}${CCY}${Math.abs(pl).toFixed(2)}` +
           `${r.pnl_pct === null ? '' : ` (${r.pnl_pct}%)`}</td>` +
-          `<td class="dim">${r.trades}</td>` +
-          `<td class="dim">${r.win_rate_pct === null ? '—' : r.win_rate_pct + '%'}</td>` +
-          `<td class="dim">${(r.since || '').slice(0, 10)}</td></tr>`;
-      }).join('');
+          `<td class="tp">${r.trades}</td>` +
+          `<td class="tp">${r.win_rate_pct === null ? '—' : r.win_rate_pct + '%'}</td>` +
+          `<td class="tp tag">${(r.since || '').slice(0, 10)}</td></tr>`;
+      }).join('') + '</tbody>';
   } else { bc.hidden = true; }
   // resting stops — real orders at the exchange, so show them plainly (#35)
   const st = s.stops || [];
@@ -765,11 +940,12 @@ async function load(){
     sc.hidden = false;
     document.getElementById('stops-note').textContent = `${st.length} resting at the exchange`;
     document.getElementById('stops').innerHTML =
-      '<tr><th>sleeve</th><th>pair</th><th>stop</th><th>below entry</th><th>placed</th></tr>' +
-      st.map(x => `<tr><td>${x.sleeve}</td><td>${x.pair}</td>` +
-        `<td>${CCY}${x.stop_price.toFixed(2)}</td>` +
-        `<td class="down">−${x.pct.toFixed(1)}%</td>` +
-        `<td class="dim">${fmtWhen(x.placed_at, false)}</td></tr>`).join('');
+      '<thead><tr><th>Sleeve</th><th>Pair</th><th class="tp">Stop</th>' +
+      '<th class="tp">Below entry</th><th class="tp">Placed</th></tr></thead><tbody class="mono">' +
+      st.map(x => `<tr><td class="slv">${x.sleeve}</td><td>${x.pair}</td>` +
+        `<td class="tp">${CCY}${x.stop_price.toFixed(2)}</td>` +
+        `<td class="tp down">−${x.pct.toFixed(1)}%</td>` +
+        `<td class="tp tag">${fmtWhen(x.placed_at, false)}</td></tr>`).join('') + '</tbody>';
   } else { sc.hidden = true; }
   // calibration: is the brain right, and does its confidence mean anything? (#33)
   const cal = s.calibration;
@@ -781,22 +957,31 @@ async function load(){
       `<b class="${edge >= 0 ? 'up' : 'down'}">${cal.hit_rate_pct}% correct</b> ` +
       `<span class="dim">of ${cal.graded} graded · coin flip = 50%</span>`;
     document.getElementById('cal').innerHTML =
-      '<tr><th>stated confidence</th><th>calls</th><th>hit rate</th><th>avg move</th></tr>' +
-      cal.buckets.map(b => `<tr><td>${b.bucket}</td><td class="dim">${b.n}</td>` +
-        `<td class="${b.hit_rate_pct >= 50 ? 'up' : 'down'}">${b.hit_rate_pct}%</td>` +
-        `<td class="dim">${b.avg_move_pct > 0 ? '+' : ''}${b.avg_move_pct}%</td></tr>`).join('');
+      '<thead><tr><th>Stated confidence</th><th class="tp">Calls</th>' +
+      '<th class="tp">Hit rate</th><th class="tp">Avg move</th></tr></thead><tbody class="mono">' +
+      cal.buckets.map(b => `<tr><td>${b.bucket}</td><td class="tp">${b.n}</td>` +
+        `<td class="tp ${b.hit_rate_pct >= 50 ? 'up' : 'down'}">${b.hit_rate_pct}%</td>` +
+        `<td class="tp">${b.avg_move_pct > 0 ? '+' : ''}${b.avg_move_pct}%</td></tr>`).join('') + '</tbody>';
   } else { cc.hidden = true; }
   // closed trades
   const ts = s.trip_stats;
   document.getElementById('tstats').textContent = ts
     ? `${ts.closed_trades} closed · ${ts.win_rate_pct}% wins · ${CCY}${ts.total_pnl_eur}` : '';
   document.getElementById('trades').innerHTML = (s.trips && s.trips.length)
-    ? '<tr><th>sleeve</th><th>pair</th><th>in→out</th><th>held</th><th>P/L</th></tr>' +
-      s.trips.map(t => `<tr><td>${t.sleeve}</td><td>${t.pair}</td>` +
-        `<td class="dim">${t.entry_price.toFixed(0)}→${t.exit_price.toFixed(0)}</td>` +
-        `<td class="dim">${t.held_days}d</td>` +
-        `<td class="${t.pnl_eur >= 0 ? 'up' : 'down'}">${CCY}${t.pnl_eur.toFixed(2)} (${t.pnl_pct}%)</td></tr>`).join('')
-    : '<tr><td class="dim">no closed trades yet</td></tr>';
+    ? '<thead><tr><th>Sleeve</th><th>Pair</th><th>In → out</th><th>Held</th>' +
+      '<th class="tp">P/L</th></tr></thead><tbody class="mono">' +
+      s.trips.map(t => `<tr><td class="slv">${t.sleeve}</td><td>${t.pair}</td>` +
+        `<td class="tag">${t.entry_price.toFixed(0)} → ${t.exit_price.toFixed(0)}</td>` +
+        `<td class="tag">${t.held_days}d</td>` +
+        `<td class="tp ${t.pnl_eur >= 0 ? 'up' : 'down'}">${CCY}${t.pnl_eur.toFixed(2)} (${t.pnl_pct}%)</td></tr>`).join('') +
+      '</tbody>'
+    : '<tbody><tr><td class="dim">no closed trades yet</td></tr></tbody>';
+  // vault skims — already in /api/state, never shown until now
+  document.getElementById('skims').innerHTML = (s.skims && s.skims.length)
+    ? '<thead><tr><th>Date</th><th>From</th><th class="tp">Amount</th></tr></thead><tbody class="mono">' +
+      s.skims.map(k => `<tr><td>${fmtWhen(k.at, false)}</td><td class="tag">${k.sleeve}</td>` +
+        `<td class="tp">${CCY}${k.amount.toFixed(2)}</td></tr>`).join('') + '</tbody>'
+    : '<tbody><tr><td class="dim">no skims yet</td></tr></tbody>';
   // a transient upstream failure (LLM overload etc.) never surfaces the raw
   // error (which can carry an API key) — it shows as a calm 'retrying' note.
   // A short retry (minutes) is preferred over waiting for the next 6h slot.
@@ -810,7 +995,8 @@ async function load(){
     retryWhen = soon ? `retrying ${inTxt}` : `retrying at next decision · ${inTxt}`;
   }
   const FAIL = new Set(['error', 'invalid', 'no_key']);
-  document.getElementById('log').innerHTML = '<tr><th>when</th><th>sleeve</th><th>what</th><th>why</th></tr>' +
+  document.getElementById('log').innerHTML =
+    '<thead><tr><th>When</th><th>Sleeve</th><th>Decision</th><th>Why</th></tr></thead><tbody>' +
     (s.decisions.length ? '' : '<tr><td class="dim" colspan="4">no decisions in the last 24 hours</td></tr>') +
     s.decisions.map(d => {
       const failed = FAIL.has(d.status);
@@ -824,9 +1010,9 @@ async function load(){
       const why = failed
         ? (f.text || 'the decision failed') + (f.permanent ? '' : ` · ${retryWhen}`)
         : (d.reasoning || d.detail || '');
-      return `<tr><td class="dim">${fmtWhen(d.at)}</td><td>${d.sleeve||''}</td>` +
-        `<td class="${cls}">${what}</td><td class="dim">${why}</td></tr>`;
-    }).join('');
+      return `<tr><td class="when">${fmtWhen(d.at)}</td><td class="slv">${d.sleeve||''}</td>` +
+        `<td class="act ${cls}">${what}</td><td class="why">${why}</td></tr>`;
+    }).join('') + '</tbody>';
 }
 load(); setInterval(load, 30000);
 </script></body></html>"""
