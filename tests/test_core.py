@@ -516,3 +516,21 @@ def test_the_vault_is_never_told_about_a_topup_it_did_not_receive():
         assert portfolio.undeployed_topup(conn, "paper", "swing") is not None
     finally:
         conn.close(); os.unlink(p)
+
+
+def test_trade_notification_is_never_cut_mid_word():
+    """The push hard-sliced the reasoning at 140 chars — mid-word, no ellipsis — so the
+    message did not look truncated, it looked broken, and the reason for the trade was
+    thrown away. A real reasoning must now arrive whole."""
+    from app.engine import _clip
+    real = ("SOL/EUR is approaching oversold territory on the 4-hour chart (RSI 30.5) while "
+            "resting above its 4h EMA200 support. Negative funding rates and a strong positive "
+            "orderbook imbalance suggest a high probability of a short-term bounce toward the "
+            "4h EMA20, offering enough margin to clear the fee hurdle.")
+    assert _clip(real) == real, "a real 299-char reasoning must arrive in full"
+
+    runaway = "word " * 400                      # only a pathological one is trimmed
+    out = _clip(runaway)
+    assert out.endswith("…")                     # and it SAYS it was trimmed
+    assert not out.rstrip("…").endswith("wor")   # never mid-word
+    assert _clip("") == "" and _clip("short") == "short"

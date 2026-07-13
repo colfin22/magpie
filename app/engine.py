@@ -37,6 +37,23 @@ def _record(conn, mode, sleeve, status, detail="", prompt=None, raw=None, decisi
 
 
 DEEP_SLEEVES = ("quarter", "vault")  # rare decisions get the stronger model
+NOTIFY_CHARS = 1000   # a safety net only; the reasoning is one or two sentences
+
+
+def _clip(text: str, limit: int = NOTIFY_CHARS) -> str:
+    """Send the whole reason; trim only a runaway one, and at a WORD boundary.
+
+    The trade push hard-sliced the reasoning at 140 characters. It cut mid-word
+    with no ellipsis, so the notification did not look truncated — it looked
+    broken ("...Negative funding rates a") — and the actual reason for the trade
+    was thrown away. Nothing needed to be cut: the reasoning is one or two
+    sentences, and the notification expands to show it.
+    """
+    t = (text or "").strip()
+    if len(t) <= limit:
+        return t
+    cut = t[:limit].rsplit(" ", 1)[0].rstrip(" ,;:—-")
+    return cut + "…"
 
 
 def run_sleeve(conn, mode: str, sleeve: str, prices: dict, market_data: list[dict],
@@ -85,7 +102,7 @@ def run_sleeve(conn, mode: str, sleeve: str, prices: dict, market_data: list[dic
     if mode == "live":
         ha.notify(f"Magpie [{sleeve}] traded",
                   f"{order['side'].upper()} {order['pair']}: {config.symbol()}{order['cost_eur']} "
-                  f"@ {order['price']:.2f} — {decision['reasoning'][:140]}")
+                  f"@ {order['price']:.2f} — {_clip(decision['reasoning'])}")
     return {"sleeve": sleeve, "status": "executed", "order": order,
             "reasoning": decision["reasoning"]}
 
