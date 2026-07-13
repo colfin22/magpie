@@ -30,7 +30,7 @@ Empty (the default) = no arms, and not one line of the live path changes.
 import json
 import logging
 import random
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from . import advisor, config, db, ledger, portfolio, sleeves, stops
 
@@ -180,8 +180,15 @@ def is_the_brain(arm: dict) -> bool:
     """
     if arm["kind"] != "llm":
         return False
-    mine = advisor.effective_model(arm["provider"], override=arm["model"])
-    return advisor.model_id(mine) == advisor.model_id(advisor.effective_model())
+    # Check BOTH models. The slow sleeves (quarter, vault) decide on the DEEP model, so
+    # comparing only the shallow one let an arm be a genuine rival on swing/fortnight and
+    # a byte-identical clone of the brain on the other two — its own control, undetected,
+    # in exactly half the sleeves (#53).
+    for deep in (False, True):
+        mine = advisor.effective_model(arm["provider"], deep=deep, override=arm["model"])
+        if advisor.model_id(mine) == advisor.model_id(advisor.effective_model(deep=deep)):
+            return True
+    return False
 
 
 def is_unconfigured(arm: dict) -> bool:
@@ -327,10 +334,13 @@ def run_sleeve(conn, arm: dict, sleeve: str, prices: dict, market_data: list[dic
         order = portfolio.execute(conn, mode, sleeve, decision_id, decision["action"],
                                   decision["pair"], decision["fraction"], prices)
     except Exception as e:  # noqa: BLE001 - a rejected order (under the minimum, nothing
-        conn.execute("UPDATE decisions SET status='error', detail=? WHERE id=?",  # to sell)
-                     (str(e), decision_id))                                       # is normal
+        # to sell) is NORMAL, and must not be filed as a model failure: health() reads
+        # these rows, and a rejected order is the model working perfectly and the
+        # exchange saying no. Filing it as 'error' declared a healthy arm dead (#51).
+        conn.execute("UPDATE decisions SET status='rejected', detail=? WHERE id=?",
+                     (str(e), decision_id))
         conn.commit()
-        return {"arm": arm["name"], "sleeve": sleeve, "status": "error", "detail": str(e)}
+        return {"arm": arm["name"], "sleeve": sleeve, "status": "rejected", "detail": str(e)}
     conn.execute("UPDATE decisions SET status='executed' WHERE id=?", (decision_id,))
     conn.commit()
     return {"arm": arm["name"], "sleeve": sleeve, "status": "executed", "order": order}
@@ -413,8 +423,12 @@ def _curve(conn, mode: str, limit: int = 400) -> list[dict]:
     return [dict(r) for r in reversed(rows)]
 
 
+# A REJECTED order is not in here on purpose: the exchange refusing a sub-minimum buy is
+# the model working perfectly and the exchange saying no. Counting it declared a healthy
+# arm dead and notified that it "cannot answer" — the opposite of the truth (#51).
 FAIL_STATUSES = ("error", "invalid", "no_key")
-DEAD_AFTER = 3   # consecutive failed decisions before an arm is called dead, not idle
+DEAD_AFTER = 3          # consecutive failed decisions before an arm is called dead
+DEAD_SPAN_MINS = 60     # ...and they must span more than one cycle
 
 
 def health(conn, mode: str) -> dict:
@@ -430,15 +444,27 @@ def health(conn, mode: str) -> dict:
     cannot answer must never be mistaken for one that chose not to.
     """
     rows = [dict(r) for r in conn.execute(
-        "SELECT status, detail FROM decisions WHERE mode=? ORDER BY id DESC LIMIT ?",
+        "SELECT at, status, detail FROM decisions WHERE mode=? ORDER BY id DESC LIMIT ?",
         (mode, DEAD_AFTER))]
     streak = 0
     for r in rows:
         if r["status"] not in FAIL_STATUSES:
             break
         streak += 1
+    # Up to four sleeves decide in a single cycle, so three failures can be ONE bad
+    # moment upstream — a 503 blip — not a dead arm. Requiring the streak to span more
+    # than a cycle stops a hiccup declaring death and then un-declaring it next cycle,
+    # which would just teach the owner to ignore the notification (#51).
+    spanned = False
+    if streak >= DEAD_AFTER:
+        try:
+            newest = datetime.fromisoformat(rows[0]["at"])
+            oldest = datetime.fromisoformat(rows[streak - 1]["at"])
+            spanned = (newest - oldest) >= timedelta(minutes=DEAD_SPAN_MINS)
+        except (TypeError, ValueError):   # an unparseable stamp must not fake a death
+            spanned = False
     last = advisor.explain(rows[0].get("detail") or "") if streak else None
-    return {"dead": streak >= DEAD_AFTER and len(rows) >= DEAD_AFTER,
+    return {"dead": streak >= DEAD_AFTER and spanned,
             "consecutive_errors": streak,
             "last_error": (last or {}).get("text")}
 
@@ -469,6 +495,19 @@ def _entry(conn, key: str, kind: str, mode: str, prices: dict, since: str | None
             "since": since, "curve": _curve(conn, mode)}
 
 
+def _label(provider: str | None, override: str | None) -> str:
+    """The model(s) that actually decide, named honestly.
+
+    The slow sleeves run the DEEP model. Naming only the fast one told the owner
+    `gemini-2.5-flash` while half the sleeves were in fact decided by
+    `gemini-pro-latest` — and a leaderboard that names the wrong model is worse
+    than one that names none (#53). Say both when they differ.
+    """
+    fast = advisor.effective_model(provider, override=override)
+    slow = advisor.effective_model(provider, deep=True, override=override)
+    return fast if advisor.model_id(fast) == advisor.model_id(slow) else f"{fast} · {slow}"
+
+
 def standings(conn, primary_mode: str, prices: dict[str, float]) -> list[dict]:
     """The real bot, every shadow arm, and the phantom hodler — ranked by equity.
 
@@ -477,7 +516,7 @@ def standings(conn, primary_mode: str, prices: dict[str, float]) -> list[dict]:
     """
     rows = [_entry(conn, "magpie", "bot", primary_mode, prices,
                    db.get_setting(conn, "bot_since"),
-                   model=advisor.effective_model(),
+                   model=_label(None, None),
                    provider=advisor.active_provider())]
     for arm in enabled():
         if not conn.execute("SELECT 1 FROM sleeve_meta WHERE mode=?", (arm["mode"],)).fetchone():
@@ -487,8 +526,7 @@ def standings(conn, primary_mode: str, prices: dict[str, float]) -> list[dict]:
                            db.get_setting(conn, f"arm_since_{arm['name']}"),
                            spec=arm["spec"],
                            provider=arm.get("provider"),
-                           model=advisor.effective_model(arm["provider"], override=arm["model"])
-                           if llm else None,
+                           model=_label(arm["provider"], arm["model"]) if llm else None,
                            health_=health(conn, arm["mode"]) if llm else None))
     bench = ledger.bench_value(conn, primary_mode, prices)
     if bench:

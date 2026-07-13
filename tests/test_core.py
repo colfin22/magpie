@@ -499,3 +499,20 @@ def test_no_topup_means_nothing_to_flag():
         assert portfolio.undeployed_topup(conn, "paper", "swing") is None
     finally:
         conn.close(); os.unlink(p)
+
+
+def test_the_vault_is_never_told_about_a_topup_it_did_not_receive():
+    """apply_topup funds sleeves.ACTIVE only — the vault is profits-only and gets €0.
+    Telling it 'a top-up was added to this sleeve' is a lie about money it never saw,
+    and the cash block exists to PUSH a sleeve to deploy (#50)."""
+    conn, p = make_db()
+    try:
+        portfolio.apply_topup(conn, "paper", 300.0)
+        assert "vault" not in sleeves.ACTIVE
+        vault = conn.execute("SELECT allocated FROM sleeve_meta WHERE mode='paper' "
+                             "AND sleeve='vault'").fetchone()
+        assert vault["allocated"] == 0.0                     # it received nothing...
+        assert portfolio.undeployed_topup(conn, "paper", "vault") is None   # ...and is told nothing
+        assert portfolio.undeployed_topup(conn, "paper", "swing") is not None
+    finally:
+        conn.close(); os.unlink(p)

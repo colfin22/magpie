@@ -234,3 +234,25 @@ def test_no_topup_note_when_none_is_outstanding():
     p = _prompt({"EUR": 15.93, "TRX": {"amount": 55.0, "eur_value": 16.0}}, 31.93, topup=None)
     assert "Idle cash" in p          # still nagged about the cash...
     assert "top-up" not in p         # ...but no top-up is invented
+
+
+def test_a_failing_credit_check_is_cached_so_a_dead_upstream_is_not_hammered(monkeypatch):
+    """The cache only stored successes, so a down OpenRouter was re-tried on EVERY 30s
+    dashboard poll — each stalling a worker for the full timeout. The upstream got
+    hammered hardest exactly when it was down (#52)."""
+    monkeypatch.setattr(config, "OPENROUTER_API_KEY", "k", raising=False)
+    advisor._CREDITS.update(at=0.0, val=None, fetched=False)
+    calls = []
+
+    class Boom:
+        def get(self, *a, **k):
+            calls.append(1)
+            raise RuntimeError("openrouter is down")
+
+        def close(self):
+            pass
+
+    for _ in range(5):
+        assert advisor.openrouter_credits(http=Boom()) is None
+    assert len(calls) == 1, f"a dead upstream was called {len(calls)} times, not backed off"
+    advisor._CREDITS.update(at=0.0, val=None, fetched=False)   # don't poison other tests

@@ -342,6 +342,12 @@ def undeployed_topup(conn, mode: str, sleeve: str) -> dict | None:
     HOLD about the position every cycle and never looks at the cash (#48). If the
     sleeve HAS bought since, the money did its job and there is nothing to say.
     """
+    # The vault is PROFITS-ONLY: apply_topup funds sleeves.ACTIVE and gives the vault
+    # nothing. Telling it "a top-up of €X was added to this sleeve" is a flat lie about
+    # money it never received — and the cash block exists to PUSH the sleeve to deploy,
+    # so it would push the vault to spend a deposit it never got.
+    if sleeve not in sleeves.ACTIVE:
+        return None
     row = conn.execute("SELECT at, amount, per_sleeve FROM topups WHERE mode=? "
                        "ORDER BY id DESC LIMIT 1", (mode,)).fetchone()
     if not row:

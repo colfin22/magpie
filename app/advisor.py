@@ -105,8 +105,10 @@ def build_prompt(portfolio: dict, market_data: list[dict], history: list[dict],
     if total > 0 and cash >= min_order:
         note = ""
         if topup:
-            note = TOPUP_NOTE.format(sym=config.symbol(), amount=topup["per_sleeve"],
-                                     when=str(topup["at"])[:10])
+            # .get: apply_topup()/detect_topup() return a DIFFERENT shape with no 'at',
+            # and a KeyError here would escape run_sleeve and abort the whole cycle
+            note = TOPUP_NOTE.format(sym=config.symbol(), amount=topup.get("per_sleeve", 0),
+                                     when=str(topup.get("at", ""))[:10])
         cash_block = CASH_BLOCK.format(sym=config.symbol(), cash=cash,
                                        pct=cash / total * 100, topup=note)
     stops_block = stop_field = ""
@@ -172,8 +174,9 @@ def effective_model(provider: str | None = None, deep: bool = False,
                           brain=provider is None)
 
 
-_CREDITS: dict = {"at": 0.0, "val": None}
-CREDITS_TTL_S = 900     # the dashboard polls /api/state every 30s — do not hammer OpenRouter
+_CREDITS: dict = {"at": 0.0, "val": None, "fetched": False}
+CREDITS_TTL_S = 900      # the dashboard polls /api/state every 30s — do not hammer OpenRouter
+CREDITS_FAIL_TTL_S = 60  # ...and back off on FAILURE too, or a dead upstream is hammered hardest
 
 
 def openrouter_credits(http: httpx.Client | None = None) -> dict | None:
@@ -192,7 +195,11 @@ def openrouter_credits(http: httpx.Client | None = None) -> dict | None:
     if not key:
         return None
     now = time.monotonic()
-    if _CREDITS["val"] is not None and now - _CREDITS["at"] < CREDITS_TTL_S:
+    # A FAILURE must be cached too. Caching only successes meant a dead OpenRouter was
+    # re-tried on every 30s dashboard poll, each one stalling a threadpool worker for the
+    # full 10s timeout — the upstream got hammered hardest exactly when it was down (#52).
+    ttl = CREDITS_TTL_S if _CREDITS["val"] is not None else CREDITS_FAIL_TTL_S
+    if _CREDITS["fetched"] and now - _CREDITS["at"] < ttl:
         return _CREDITS["val"]
     own = http is None
     http = http or httpx.Client(timeout=10)
@@ -202,11 +209,13 @@ def openrouter_credits(http: httpx.Client | None = None) -> dict | None:
         r.raise_for_status()
         d = r.json().get("data") or {}
         total, used = float(d.get("total_credits") or 0), float(d.get("total_usage") or 0)
-        _CREDITS.update(at=now, val={"remaining_usd": round(total - used, 2),
-                                     "total_usd": round(total, 2)})
+        _CREDITS.update(at=now, fetched=True,
+                        val={"remaining_usd": round(total - used, 2),
+                             "total_usd": round(total, 2)})
         return _CREDITS["val"]
     except Exception as e:  # noqa: BLE001 - a status line must never take the page down
         LOGGER.warning("openrouter credit check failed: %s", _redact(str(e)))
+        _CREDITS.update(at=now, fetched=True, val=None)   # back off; don't retry every poll
         return None
     finally:
         if own:
@@ -353,6 +362,13 @@ def ask(prompt: str, http: httpx.Client | None = None,
     is_brain = provider is None
     if provider is None and deep and config.DEEP_PROVIDER:
         # rare, expensive calls may live on a different provider than the cheap ones
+        if config.DEEP_PROVIDER.lower() != active_provider():
+            # ...and once we HAVE switched provider, LLM_MODEL_DEEP no longer applies:
+            # it names a model of the OTHER provider. Letting it through sent, e.g., an
+            # Anthropic model id to the Gemini API -> 404 -> a permanent safe HOLD on
+            # quarter and vault. A bot that looks thoughtful and is dead on half its
+            # sleeves. Only DEEP_MODEL (or the provider's own default) is valid here (#53).
+            is_brain = False
         provider, model = config.DEEP_PROVIDER, model or config.DEEP_MODEL or None
     provider = (provider or active_provider()).lower()
     if provider not in KEY_ATTR:

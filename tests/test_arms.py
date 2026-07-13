@@ -466,11 +466,11 @@ def test_a_healthy_arm_is_not_called_dead():
 
 def test_an_arm_that_cannot_answer_is_dead_not_holding():
     """The whole point: a flat line reads as conviction. It isn't — the model
-    never answered. Three straight failures and the arm is marked dead."""
+    never answered. Three straight failures SPANNING CYCLES and the arm is dead."""
     conn, p = make_db()
     try:
-        for _ in range(3):
-            _decide(conn, "shadow:claude", "error", "402 Insufficient credits")
+        for m in (400, 200, 10):   # spread over hours: really dead, not one bad moment
+            _fail(conn, "shadow:claude", "error", _stamp(m), "402 Insufficient credits")
         h = arms.health(conn, "shadow:claude")
         assert h["dead"]
         assert h["consecutive_errors"] == 3
@@ -495,8 +495,8 @@ def test_one_bad_cycle_is_not_death():
 def test_a_recovered_arm_is_alive_again():
     conn, p = make_db()
     try:
-        for _ in range(3):
-            _decide(conn, "shadow:claude", "error", "402 Insufficient credits")
+        for m in (400, 200, 10):
+            _fail(conn, "shadow:claude", "error", _stamp(m), "402 Insufficient credits")
         assert arms.health(conn, "shadow:claude")["dead"]
         _decide(conn, "shadow:claude", "held")     # the key is topped up; it answers
         assert not arms.health(conn, "shadow:claude")["dead"]
@@ -529,3 +529,71 @@ def test_a_broken_health_announcement_never_stops_the_other_arms(monkeypatch):
         assert by["ema"] == "executed"
     finally:
         conn.close(); os.unlink(p)
+
+
+# ---------- a rejected order is not a dead model (#51) ----------
+
+def _fail(conn, mode, status, at, detail="boom"):
+    conn.execute("INSERT INTO decisions (at, mode, sleeve, action, status, detail) "
+                 "VALUES (?,?,'swing','hold',?,?)", (at, mode, status, detail))
+    conn.commit()
+
+
+def _stamp(mins_ago):
+    from datetime import datetime, timedelta, timezone
+    return (datetime.now(timezone.utc) - timedelta(minutes=mins_ago)).isoformat(timespec="seconds")
+
+
+def test_a_rejected_order_never_kills_a_healthy_arm():
+    """The exchange refusing a sub-minimum buy is the MODEL WORKING and the exchange
+    saying no. Counting it declared a healthy arm dead and announced it 'cannot answer'."""
+    conn, p = make_db()
+    try:
+        for m in (180, 120, 60):
+            _fail(conn, "shadow:claude", "rejected", _stamp(m),
+                  "buy of €0.75 is under the €10 exchange minimum")
+        h = arms.health(conn, "shadow:claude")
+        assert not h["dead"]
+        assert h["consecutive_errors"] == 0
+    finally:
+        conn.close(); os.unlink(p)
+
+
+def test_a_genuinely_dead_model_spanning_cycles_is_dead():
+    conn, p = make_db()
+    try:
+        for m in (400, 200, 10):        # three failures spread over hours = really dead
+            _fail(conn, "shadow:claude", "error", _stamp(m), "402 Insufficient credits")
+        assert arms.health(conn, "shadow:claude")["dead"]
+    finally:
+        conn.close(); os.unlink(p)
+
+
+def test_one_bad_moment_across_three_sleeves_is_not_a_death():
+    """Up to four sleeves decide in ONE cycle, seconds apart. A single 503 blip upstream
+    would otherwise declare death and un-declare it next cycle — a flapping alert that
+    only teaches the owner to ignore it."""
+    conn, p = make_db()
+    try:
+        for m in (2, 1, 0):             # same cycle, seconds apart
+            _fail(conn, "shadow:claude", "error", _stamp(m), "503 overloaded")
+        h = arms.health(conn, "shadow:claude")
+        assert not h["dead"]                    # not dead: it did not span a cycle
+        assert h["consecutive_errors"] == 3     # ...but the streak is still reported
+    finally:
+        conn.close(); os.unlink(p)
+
+
+# ---------- the brain is not its own control on the DEEP sleeves either (#53) ----------
+
+def test_an_arm_matching_the_brains_deep_model_is_the_brain(monkeypatch):
+    """quarter and vault decide on the DEEP model. An arm can be a real rival on the
+    fast sleeves and a byte-identical clone of the brain on the slow ones."""
+    monkeypatch.setattr(config, "LLM_PROVIDER", "gemini", raising=False)
+    monkeypatch.setattr(config, "LLM_MODEL", "gemini-2.5-pro", raising=False)   # brain fast
+    monkeypatch.setattr(config, "LLM_MODEL_DEEP", "", raising=False)
+    monkeypatch.setattr(config, "GEMINI_MODEL_DEEP", "gemini-2.5-pro", raising=False)
+    # the arm defaults to gemini's fast model -> a real rival on swing/fortnight,
+    # but on the deep sleeves the brain runs gemini-2.5-pro... and so would this arm
+    monkeypatch.setattr(config, "SHADOW_ARMS", "twin:llm:gemini@gemini-2.5-pro", raising=False)
+    assert arms.enabled() == []      # caught: it IS the brain on the deep sleeves
