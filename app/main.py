@@ -493,8 +493,12 @@ def api_state():
             "SELECT substr(at,1,16) t, ROUND(SUM(total_eur),2) eur FROM snapshots "
             "WHERE mode=? GROUP BY t ORDER BY t DESC LIMIT 400", (config.mode(),))]
         trips = ledger.round_trips(conn, config.mode())
+        for d in decisions:      # a failure explains ITSELF; the UI must not guess (#33)
+            if d["status"] in ("error", "invalid", "no_key"):
+                d["failure"] = advisor.explain(d.get("detail") or "")
         return {"mode": config.mode(), "version": __version__, "prices": prices, "overview": ov,
                 "ccy": config.symbol(), "ccy_code": config.BASE_CURRENCY,
+                "tz": config.TIMEZONE,
                 "next_cycle": _next_cycle_iso(),
                 "retry_cycle_at": db.get_setting(conn, "retry_cycle_at") or None,
                 "halted": db.get_setting(conn, "halted") == "1",
@@ -611,6 +615,15 @@ the confidence is decoration.</p></div>
 async function load(){
   const s = await (await fetch('/api/state', {cache: 'no-store'})).json();
   const CCY = s.ccy || '€', CCODE = s.ccy_code || 'EUR';
+  // stamps are stored UTC; show them on the operator's clock (the TIMEZONE setting),
+  // which is also the clock the decision slots run on
+  const TZ = s.tz || undefined;
+  const fmtWhen = (iso, withTime = true) => {
+    if (!iso) return '';
+    const o = {timeZone: TZ, day: '2-digit', month: 'short'};
+    if (withTime) { o.hour = '2-digit'; o.minute = '2-digit'; o.hour12 = false; }
+    return new Date(iso).toLocaleString('en-GB', o);
+  };
   document.getElementById('updated').textContent = 'updated ' + new Date().toLocaleTimeString();
   if (s.version) document.getElementById('ver').textContent = 'v' + s.version;
   if (s.next_cycle) {
@@ -718,7 +731,7 @@ async function load(){
       st.map(x => `<tr><td>${x.sleeve}</td><td>${x.pair}</td>` +
         `<td>${CCY}${x.stop_price.toFixed(2)}</td>` +
         `<td class="down">−${x.pct.toFixed(1)}%</td>` +
-        `<td class="dim">${(x.placed_at || '').slice(0, 10)}</td></tr>`).join('');
+        `<td class="dim">${fmtWhen(x.placed_at, false)}</td></tr>`).join('');
   } else { sc.hidden = true; }
   // calibration: is the brain right, and does its confidence mean anything? (#33)
   const cal = s.calibration;
@@ -762,11 +775,17 @@ async function load(){
   document.getElementById('log').innerHTML = '<tr><th>when</th><th>sleeve</th><th>what</th><th>why</th></tr>' +
     s.decisions.map(d => {
       const failed = FAIL.has(d.status);
-      const cls = d.status==='executed' ? d.action : d.status==='held' ? 'hold' : failed ? 'dim' : 'err';
-      const what = failed ? '⏳ RETRY' : (d.status==='held' ? 'HOLD' : (d.action||d.status).toUpperCase()) +
-        (d.pair ? ' ' + d.pair : '') + (d.fraction ? ' ' + (d.fraction*100).toFixed(0)+'%' : '');
-      const why = failed ? `temporary hiccup — ${retryWhen}` : (d.reasoning || d.detail || '');
-      return `<tr><td class="dim">${d.at.slice(5,16)}</td><td>${d.sleeve||''}</td>` +
+      const cls = d.status==='executed' ? d.action : d.status==='held' ? 'hold'
+      : (failed && (d.failure||{}).permanent) ? 'err' : 'dim';
+      const f = d.failure || {};
+      // a permanent failure must NOT be dressed up as a hiccup that will retry away
+      const what = failed ? (f.permanent ? '⛔ FAILED' : '⏳ RETRY')
+        : (d.status==='held' ? 'HOLD' : (d.action||d.status).toUpperCase()) +
+          (d.pair ? ' ' + d.pair : '') + (d.fraction ? ' ' + (d.fraction*100).toFixed(0)+'%' : '');
+      const why = failed
+        ? (f.text || 'the decision failed') + (f.permanent ? '' : ` · ${retryWhen}`)
+        : (d.reasoning || d.detail || '');
+      return `<tr><td class="dim">${fmtWhen(d.at)}</td><td>${d.sleeve||''}</td>` +
         `<td class="${cls}">${what}</td><td class="dim">${why}</td></tr>`;
     }).join('');
 }

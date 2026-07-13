@@ -190,6 +190,35 @@ def _redact(msg: str) -> str:
     return _SECRET_RE.sub(r"\1REDACTED", msg)
 
 
+def explain(detail: str) -> dict:
+    """Turn a stored failure into something honest for the dashboard.
+
+    Every failure used to render as the same calm "temporary hiccup — retrying",
+    because the raw error could carry the API key. The key is scrubbed now, and
+    the canned line was actively misleading: an exhausted quota is NOT temporary
+    and no amount of retrying will fix it.
+    """
+    d = (detail or "").lower()
+    if "429" in d or "quota" in d or "resource_exhausted" in d:
+        return {"kind": "quota", "permanent": True,
+                "text": "the model provider refused the call — out of quota (429). "
+                        "Retrying will not fix this: change the model, or add billing."}
+    if "no api key" in d or "no_key" in d:
+        return {"kind": "no_key", "permanent": True,
+                "text": "no API key is configured for this brain."}
+    if "5" in d[:80] and ("50" in d or "overload" in d or "unavailable" in d):
+        return {"kind": "upstream", "permanent": False,
+                "text": "the model provider was overloaded — this usually clears by itself."}
+    if "timeout" in d or "timed out" in d or "connect" in d:
+        return {"kind": "network", "permanent": False,
+                "text": "could not reach the model provider — a network blip."}
+    if "invalid" in d or "unparseable" in d:
+        return {"kind": "invalid", "permanent": False,
+                "text": "the model answered with something that was not a valid decision, "
+                        "so it was treated as HOLD."}
+    return {"kind": "other", "permanent": False, "text": detail[:160]}
+
+
 def _retryable(e: Exception) -> bool:
     """Transient failures worth another attempt: provider overload / rate-limit
     (HTTP 5xx or 429) and network/timeout blips. Auth (4xx) and malformed-shape
@@ -221,6 +250,9 @@ def ask(prompt: str, http: httpx.Client | None = None,
     Transient upstream failures (503 overload, 429, timeouts) are retried with
     exponential backoff; only a sustained outage surfaces as an AdvisorError
     (which the engine turns into a safe HOLD)."""
+    if provider is None and deep and config.DEEP_PROVIDER:
+        # rare, expensive calls may live on a different provider than the cheap ones
+        provider, model = config.DEEP_PROVIDER, model or config.DEEP_MODEL or None
     provider = (provider or active_provider()).lower()
     if provider not in KEY_ATTR:
         raise AdvisorError(f"unknown provider {provider!r}")

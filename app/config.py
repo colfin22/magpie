@@ -102,6 +102,14 @@ TAKER_FEE = float(os.environ.get("TAKER_FEE", "0.004"))   # market-order fee (fa
 MAKER_FEE = float(os.environ.get("MAKER_FEE", "0.0025"))  # post-only limit fee (preferred fills)
 LIMIT_FILL_WAIT_S = int(os.environ.get("LIMIT_FILL_WAIT_S", "90"))  # patience before falling back to market
 
+# the DEEP brain (quarter, vault, monthly review). These calls are rare but want the
+# strongest model — and a free-tier key often has NO quota for the big model at all
+# (Gemini's free tier gives none for 2.5-pro), which fails those sleeves forever while
+# the cheap sleeves carry on fine. Point them at a provider that will actually serve
+# them; empty = use LLM_PROVIDER, exactly as before.
+DEEP_PROVIDER = os.environ.get("DEEP_PROVIDER", "")
+DEEP_MODEL = os.environ.get("DEEP_MODEL", "")
+
 # richer decision context (#34). Funding + open interest come from Kraken's PUBLIC
 # futures book — read-only sentiment, the bot stays spot-only and never trades a perp.
 # News is OFF unless you give it a feed: headlines are the one source that can make an
@@ -172,6 +180,7 @@ EDITABLE = {
     "DYNAMIC_SELL_FLOOR_N": "int",
     "SHADOW_ARMS": "str",
     "CONTEXT_FUNDING": "bool", "CONTEXT_DEPTH": "bool", "NEWS_RSS_URL": "str",
+    "DEEP_PROVIDER": "str", "DEEP_MODEL": "str",
     "STOP_LOSS_ENABLED": "bool", "STOP_LOSS_PCT": "float",
     "STOP_LOSS_MIN_PCT": "float", "STOP_LOSS_MAX_PCT": "float",
     "DASHBOARD_USER": "str", "DASHBOARD_PASSWORD": "str",
