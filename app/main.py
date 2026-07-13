@@ -506,9 +506,13 @@ def api_state():
     try:
         prices = market.tickers(config.PAIRS)
         ov = portfolio.overview(conn, config.mode(), prices)
+        # The diary is the REAL bot's, and only the last 24h of it. Without the mode
+        # filter the shadow arms flood it — 20 of the last 30 rows were simulated, shown
+        # with no way to tell them apart from a trade that moved real money.
         decisions = [dict(r) for r in conn.execute(
             "SELECT at, mode, sleeve, action, pair, fraction, confidence, reasoning, status, detail "
-            "FROM decisions ORDER BY id DESC LIMIT 30")]
+            "FROM decisions WHERE mode=? AND at >= datetime('now','-24 hours') "
+            "ORDER BY id DESC LIMIT 50", (config.mode(),))]
         skims = [dict(r) for r in conn.execute(
             "SELECT at, sleeve, amount FROM skims ORDER BY id DESC LIMIT 10")]
         curve = [dict(r) for r in conn.execute(
@@ -640,7 +644,9 @@ the confidence is decoration.</p></div>
 <div class="card"><div class="dim">Closed trades <span id="tstats" style="float:right"></span></div><table id="trades"></table></div>
 <div class="card" id="lessons-card" hidden><div class="dim" id="lessons-when"></div>
 <p class="dim" id="lessons-text" style="font-size:.85rem;line-height:1.55;margin:.4rem 0 0"></p></div>
-<div class="card"><div class="dim">Recent decisions</div><table id="log"></table></div>
+<div class="card"><div class="dim">Recent decisions — <b style="color:#e6e9f0">magpie only</b>
+<span class="dim" style="float:right;font-size:.75rem">last 24 hours · the shadow arms have their own books (see the leaderboard)</span></div>
+<table id="log"></table></div>
 <div class="card"><button onclick="if(confirm('Halt all trading?'))fetch('/api/halt',{method:'POST'}).then(()=>load())">⛔ HALT TRADING</button>
 <span class="dim" id="halted"></span></div>
 <script>
@@ -805,6 +811,7 @@ async function load(){
   }
   const FAIL = new Set(['error', 'invalid', 'no_key']);
   document.getElementById('log').innerHTML = '<tr><th>when</th><th>sleeve</th><th>what</th><th>why</th></tr>' +
+    (s.decisions.length ? '' : '<tr><td class="dim" colspan="4">no decisions in the last 24 hours</td></tr>') +
     s.decisions.map(d => {
       const failed = FAIL.has(d.status);
       const cls = d.status==='executed' ? d.action : d.status==='held' ? 'hold'

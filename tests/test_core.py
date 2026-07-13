@@ -430,3 +430,34 @@ def test_backup_writes_a_file_that_opens_and_prunes_old_ones(monkeypatch, tmp_pa
         assert len(list(tmp_path.glob("magpie-*.db"))) == 2
     finally:
         conn.close(); os.unlink(p)
+
+
+def test_the_diary_shows_only_the_real_bot_and_only_24h(monkeypatch):
+    """Two ways this panel lied: it showed EVERY mode (20 of the last 30 rows were
+    shadow arms, rendered identically to trades that moved real money), and it had no
+    time bound at all."""
+    from fastapi.testclient import TestClient
+    from app import main
+    conn, p = make_db()
+    orig = db.connect
+    monkeypatch.setattr(config, "mode", lambda: "live")
+    # TestClient serves on another thread, and a sqlite connection belongs to the
+    # thread that made it — hand out a fresh connection to the same file
+    monkeypatch.setattr(db, "connect", lambda *a, **k: orig(p))
+    monkeypatch.setattr(market, "tickers", lambda pairs: {"BTC/EUR": 100.0})
+    try:
+        conn.execute("INSERT INTO decisions(at, mode, sleeve, action, status, reasoning) "
+                     "VALUES(datetime('now','-2 hours'),'live','swing','buy','executed','real')")
+        conn.execute("INSERT INTO decisions(at, mode, sleeve, action, status, reasoning) "
+                     "VALUES(datetime('now','-2 hours'),'shadow:coinflip','swing','buy','executed','a coin flip')")
+        conn.execute("INSERT INTO decisions(at, mode, sleeve, action, status, reasoning) "
+                     "VALUES(datetime('now','-3 days'),'live','swing','sell','executed','ancient')")
+        conn.commit()
+
+        d = TestClient(main.app).get("/api/state").json()["decisions"]
+        said = [x["reasoning"] for x in d]
+        assert "real" in said                    # the bot's own recent decision
+        assert "a coin flip" not in said         # a shadow arm must never look like a real trade
+        assert "ancient" not in said             # older than 24h
+    finally:
+        conn.close(); os.unlink(p)
