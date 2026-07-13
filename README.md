@@ -99,6 +99,22 @@ settings page — dropdown, key, **Test active brain**, save; no restart.
 > each needs a developer key from the provider's platform, billed per token.
 > Gemini's free tier is enough to run Magpie outright.
 
+## The books
+
+The ledger records **what the exchange actually settled** — the filled amount, the average
+price it really got, and the fee it really charged — not what the bot assumed would happen.
+That distinction matters more than it sounds: Kraken gives you the full amount you bought and
+charges the fee *on top*, so a bot that models the fee instead of reading it disagrees with
+reality on every single trade, and the difference gets quietly laundered into the nightly
+reconcile as anonymous "drift". Drift absorption is meant to be the exception, not the
+accounting.
+
+Paper and shadow modes mirror the same fee convention, so a simulated arm is playing the same
+game as the live bot rather than a slightly easier one.
+
+Every stamp on the dashboard is shown on **your** clock (`TIMEZONE`) — the same clock the
+decision slots run on.
+
 ## Safety rails (the non-negotiables)
 
 - **The API key cannot withdraw.** Create it with query + trade permissions only.
@@ -200,6 +216,21 @@ Everything else is env vars — see [`.env.example`](.env.example). Notables:
 `LLM_MODEL` / `LLM_MODEL_DEEP` (optional model overrides), `PAIRS` (the base
 tradeable universe, default BTC/EUR + ETH/EUR), and `SKIM_FRACTION` (profit share
 skimmed to the vault, default 0.5).
+
+**The deep brain.** Rare, expensive decisions — the quarter sleeve, the vault and the
+monthly self-review — use a stronger model (`LLM_MODEL_DEEP`, or `GEMINI_MODEL_DEEP`).
+`DEEP_PROVIDER` / `DEEP_MODEL` let those few calls live on a **different provider** than the
+frequent cheap ones: useful when your main key has no quota for the big model, which is a
+common free-tier limit. Empty = use `LLM_PROVIDER`, as before.
+
+> **Pin an alias, not a preview.** Model ids get retired — `gemini-2.5-pro` now returns
+> *"no longer available to new users"*, and `gemini-3-pro-preview` is already gone. Prefer a
+> tracking alias like `gemini-pro-latest`. When a model does vanish the sleeve fails safe to
+> HOLD, and the dashboard now says so plainly instead of promising a retry that cannot help.
+
+> **Settings beat env.** Anything saved on the `/settings` page persists in the database as
+> `cfg_<KEY>` and **overrides the environment**. Editing `.env` for a key you have already set
+> in the UI does nothing — change it in the UI (or clear the row).
 
 The features below are all **off unless you turn them on**:
 `SHADOW_ARMS` (rival strategies traded in simulation — [shadow arms](#shadow-arms-optional)),
