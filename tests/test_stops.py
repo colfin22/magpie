@@ -196,7 +196,7 @@ def test_an_unplaceable_stop_does_not_undo_the_buy(monkeypatch):
             return {"id": "BUY-1"}          # the buy itself goes through fine
 
     monkeypatch.setattr(market, "exchange", lambda: Ex())
-    monkeypatch.setattr(portfolio, "_live_fill", lambda pair, side, amount, px: {
+    monkeypatch.setattr(portfolio, "_live_fill", lambda pair, side, amount, px, *a, **k: {
         "id": "BUY-1", "filled": amount, "cost": amount * px, "price": px,
         "fee_quote": amount * px * config.MAKER_FEE, "fee_base": 0.0})
     conn, p = make_db()

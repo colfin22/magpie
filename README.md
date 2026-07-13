@@ -115,6 +115,12 @@ game as the live bot rather than a slightly easier one.
 Every stamp on the dashboard is shown on **your** clock (`TIMEZONE`) — the same clock the
 decision slots run on.
 
+**Backups.** The database is the audit trail — every prompt, decision, order and fill. `POST
+/api/backup` writes a **crash-consistent** copy (SQLite's `VACUUM INTO`, safe against a live
+writer — unlike `cp` or a filesystem snapshot of a WAL-mode file, which *usually* restores)
+into `BACKUP_DIR`, keeping the last `BACKUP_KEEP` (default 7). Schedule it alongside the other
+timers. If you already snapshot the host, point it at the copies, not the live file.
+
 ## Safety rails (the non-negotiables)
 
 - **The API key cannot withdraw.** Create it with query + trade permissions only.

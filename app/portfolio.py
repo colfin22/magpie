@@ -118,22 +118,57 @@ def _settle(ex, pair: str, order_ids: list[str]) -> dict:
             "fee_base": fee_base, "price": price}
 
 
-def _live_fill(pair: str, side: str, amount: float, limit_price: float) -> dict:
+def _mark_inflight(conn, decision_id, mode, sleeve, pair, side, oid) -> None:
+    """Write the order id down the INSTANT it exists.
+
+    The fill sequence below can take 90s. If the process dies inside that window
+    and nothing on disk links the Kraken order to the decision that placed it,
+    the order is orphaned: it may fill, arrive with no audit row, and be laundered
+    into "drift" by the nightly reconcile (#40). This row is what recovery reads.
+    """
+    if not oid:
+        return
+    conn.execute("INSERT OR REPLACE INTO inflight(exchange_id, decision_id, at, mode, sleeve, "
+                 "pair, side) VALUES(?,?,?,?,?,?,?)",
+                 (oid, decision_id, _now(), mode, sleeve, pair, side))
+    conn.commit()
+
+
+def _clear_inflight(conn, decision_id: int) -> None:
+    conn.execute("DELETE FROM inflight WHERE decision_id=?", (decision_id,))
+    conn.commit()
+
+
+def _live_fill(pair: str, side: str, amount: float, limit_price: float,
+               conn=None, decision_id: int = 0, mode: str = "live", sleeve: str = "") -> dict:
     """Place a post-only limit at the touch; fall back to market if unfilled.
 
     Maker fills save ~0.15% per side over market orders — free money on every
     patient fill. Returns the SETTLED truth from the exchange, not an estimate.
+
+    Every order id is persisted the moment it is created, so a crash mid-fill
+    leaves a trail to recover from (#40).
     """
     import time as _t
     ex = market.exchange()
     ids: list[str] = []
+
+    def note(o):
+        oid = o.get("id")
+        if oid:
+            ids.append(oid)
+            if conn is not None:
+                _mark_inflight(conn, decision_id, mode, sleeve, pair, side, oid)
+        return oid
+
     try:
         o = ex.create_order(pair, "limit", side, amount, limit_price, {"postOnly": True})
-        ids.append(o.get("id"))
+        note(o)
     except Exception as e:  # noqa: BLE001 - post-only rejected (would cross) -> just take
         LOGGER.info("post-only rejected (%s) — going to market", e)
         o = ex.create_order(pair, "market", side, amount)
-        return {"id": o.get("id"), **_settle(ex, pair, [o.get("id")])}
+        note(o)
+        return {"id": o.get("id"), **_settle(ex, pair, ids)}
 
     deadline = _t.time() + config.LIMIT_FILL_WAIT_S
     while _t.time() < deadline:
@@ -153,7 +188,7 @@ def _live_fill(pair: str, side: str, amount: float, limit_price: float) -> dict:
     LOGGER.info("limit unfilled after %ss (%.6f of %.6f) — market for the rest",
                 config.LIMIT_FILL_WAIT_S, filled, amount)
     o2 = ex.create_order(pair, "market", side, remainder)
-    ids.append(o2.get("id"))
+    note(o2)
     return {"id": o2.get("id"), **_settle(ex, pair, ids)}   # blended across both fills
 
 
@@ -180,7 +215,7 @@ def execute(conn, mode: str, sleeve: str, decision_id: int, action: str, pair: s
         # size so that cost + fee == spend, because the fee is charged on top
         amount = spend / (price * (1 + config.MAKER_FEE))
         if mode == "live":
-            f = _live_fill(pair, "buy", amount, price)
+            f = _live_fill(pair, "buy", amount, price, conn, decision_id, mode, sleeve)
             exchange_id = f["id"]
             amount = f["filled"] - f["fee_base"]     # what actually landed in the account
             price = f["price"] or price
@@ -209,7 +244,7 @@ def execute(conn, mode: str, sleeve: str, decision_id: int, action: str, pair: s
         if amount <= 0 or proceeds < 1.0:
             raise ValueError(f"nothing meaningful to sell ({asset} balance {h.get(asset, 0.0)})")
         if mode == "live":
-            f = _live_fill(pair, "sell", amount, price)
+            f = _live_fill(pair, "sell", amount, price, conn, decision_id, mode, sleeve)
             exchange_id = f["id"]
             amount = f["filled"]                     # what actually left the account
             price = f["price"] or price
@@ -236,6 +271,7 @@ def execute(conn, mode: str, sleeve: str, decision_id: int, action: str, pair: s
     conn.commit()
     LOGGER.info("[%s/%s] %s %.8f %s @ %.2f (€%.2f, fee €%.2f)",
                 mode, sleeve, action, amount, asset, price, spend, fee)
+    _clear_inflight(conn, decision_id)   # booked — nothing left to recover (#40)
     stop = stops.place(conn, mode, sleeve, pair, amount, price, stop_pct) if action == "buy" else None
     return {"side": action, "pair": pair, "amount": amount, "price": price,
             "cost_eur": round(spend, 2), "fee_eur": round(fee, 2), "stop": stop}
@@ -304,3 +340,94 @@ def detect_topup(conn, mode: str) -> dict | None:
     if surplus > TOPUP_EPSILON_EUR:
         return apply_topup(conn, mode, round(surplus, 2))
     return None
+
+
+# ---------- recovery: what if we died mid-fill? (#40) ----------
+
+def recover_inflight(conn, mode: str) -> list[dict]:
+    """Reconcile any order that was in flight when the process last died.
+
+    `execute()` can spend 90s waiting for a maker fill. A deploy, a crash or a
+    reboot inside that window leaves the decision `pending` and possibly a LIVE
+    order resting at Kraken that the books have never seen. If it fills, the coins
+    arrive with no audit row and the nightly reconcile launders them into "drift",
+    attributed to whichever sleeves happen to hold that asset — the wrong ones.
+
+    So: ask the exchange what became of each in-flight order, and either ADOPT the
+    fill (book it properly, with its order row and its diary entry) or CANCEL what
+    is still resting and mark the decision failed. Nothing is invented; what the
+    exchange says happened is what gets booked.
+    """
+    rows = [dict(r) for r in conn.execute(
+        "SELECT * FROM inflight WHERE mode=? ORDER BY decision_id", (mode,))]
+    if not rows or mode != "live":
+        if rows:
+            conn.execute("DELETE FROM inflight WHERE mode=?", (mode,))
+            conn.commit()
+        return []
+
+    ex = market.exchange()
+    out = []
+    by_decision: dict[int, list[dict]] = {}
+    for r in rows:
+        by_decision.setdefault(r["decision_id"], []).append(r)
+
+    for decision_id, group in by_decision.items():
+        pair, sleeve, side = group[0]["pair"], group[0]["sleeve"], group[0]["side"]
+        booked = conn.execute("SELECT 1 FROM orders WHERE decision_id=?", (decision_id,)).fetchone()
+        if booked:                                    # it completed after all
+            _clear_inflight(conn, decision_id)
+            continue
+        try:
+            for r in group:                           # anything still resting must not stay
+                try:
+                    o = ex.fetch_order(r["exchange_id"], pair)
+                    if (o.get("status") or "").lower() == "open":
+                        ex.cancel_order(r["exchange_id"], pair)
+                        LOGGER.warning("cancelled an orphaned %s order %s left in flight",
+                                       side, r["exchange_id"])
+                except Exception as e:  # noqa: BLE001 - already gone is fine
+                    LOGGER.info("in-flight order %s: %s", r["exchange_id"], e)
+            f = _settle(ex, pair, [r["exchange_id"] for r in group])
+        except Exception as e:  # noqa: BLE001 - never let recovery take the app down
+            LOGGER.warning("could not recover decision %s: %s", decision_id, e)
+            continue
+
+        asset = pair.split("/")[0]
+        h = holdings(conn, mode, sleeve)
+        if f["filled"] > 0:                           # it FILLED — book the truth, late but honest
+            fee = f["fee_quote"]
+            if side == "buy":
+                amount = f["filled"] - f["fee_base"]
+                spend = f["cost"] + fee
+                _set(conn, mode, sleeve, config.BASE_CURRENCY,
+                     h.get(config.BASE_CURRENCY, 0.0) - spend)
+                _set(conn, mode, sleeve, asset, h.get(asset, 0.0) + amount)
+            else:
+                amount = f["filled"]
+                spend = f["cost"]
+                _set(conn, mode, sleeve, asset, h.get(asset, 0.0) - amount)
+                _set(conn, mode, sleeve, config.BASE_CURRENCY,
+                     h.get(config.BASE_CURRENCY, 0.0) + spend - fee)
+            conn.execute(
+                "INSERT INTO orders(at, mode, sleeve, decision_id, pair, side, amount, price, "
+                "cost, fee, exchange_id) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                (_now(), mode, sleeve, decision_id, pair, side, amount, f["price"], spend, fee,
+                 group[-1]["exchange_id"]))
+            conn.execute("UPDATE decisions SET status='executed', detail=? WHERE id=?",
+                         ("recovered after a restart interrupted the fill — booked from the "
+                          "exchange's own record", decision_id))
+            conn.commit()
+            LOGGER.warning("[%s/%s] RECOVERED an interrupted %s: %.8f %s @ %.6f",
+                           mode, sleeve, side, amount, asset, f["price"])
+            out.append({"decision_id": decision_id, "outcome": "adopted", "sleeve": sleeve,
+                        "pair": pair, "side": side, "amount": amount, "price": f["price"]})
+        else:                                         # nothing filled — no trade happened
+            conn.execute("UPDATE decisions SET status='error', detail=? WHERE id=?",
+                         ("interrupted by a restart before it filled; the resting order was "
+                          "cancelled — no money moved", decision_id))
+            conn.commit()
+            out.append({"decision_id": decision_id, "outcome": "cancelled", "sleeve": sleeve,
+                        "pair": pair, "side": side})
+        _clear_inflight(conn, decision_id)
+    return out

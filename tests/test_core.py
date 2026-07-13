@@ -370,7 +370,7 @@ def test_live_books_what_the_exchange_settled_not_what_we_modelled(monkeypatch):
     monkeypatch.setattr(portfolio, "min_order_eur", lambda pair: 1.0)
     monkeypatch.setattr(market, "touch", lambda pair: {"bid": 0.29, "ask": 0.29, "last": 0.29})
     # the exchange says: 54.6912871 TRX landed, at 0.29, and it charged €0.0635 on top
-    monkeypatch.setattr(portfolio, "_live_fill", lambda pair, side, amount, px: {
+    monkeypatch.setattr(portfolio, "_live_fill", lambda pair, side, amount, px, *a, **k: {
         "id": "O2KK2U", "filled": 54.6912871, "cost": 15.8604, "price": 0.29,
         "fee_quote": 0.0635, "fee_base": 0.0})
     try:
@@ -404,5 +404,29 @@ def test_paper_mirrors_krakens_fee_convention(monkeypatch):
         cost = after["BTC"] * 100.0
         assert round(cost * (1 + config.MAKER_FEE), 6) == round(spent, 6)
         assert out["fee_eur"] == round(cost * config.MAKER_FEE, 2)
+    finally:
+        conn.close(); os.unlink(p)
+
+
+def test_backup_writes_a_file_that_opens_and_prunes_old_ones(monkeypatch, tmp_path):
+    """A WAL-mode DB copied live may not restore. VACUUM INTO always produces a
+    file that opens — this is the audit trail for real money (#41)."""
+    conn, p = make_db()
+    monkeypatch.setattr(config, "BACKUP_DIR", str(tmp_path), raising=False)
+    monkeypatch.setattr(config, "BACKUP_KEEP", 2, raising=False)
+    try:
+        conn.execute("INSERT INTO decisions(at, mode, sleeve, status) "
+                     "VALUES('2026-07-13T06:00:00+00:00','live','swing','held')")
+        conn.commit()
+        out = db.backup(conn, p)
+        assert out["bytes"] > 0
+        restored = db.connect(out["file"])          # the copy actually opens...
+        assert restored.execute("SELECT COUNT(*) c FROM decisions").fetchone()["c"] == 1
+        restored.close()                           # ...and carries the ledger
+
+        for _ in range(3):                         # retention holds the line
+            out = db.backup(conn, p)
+        assert out["kept"] == 2 and out["pruned"]
+        assert len(list(tmp_path.glob("magpie-*.db"))) == 2
     finally:
         conn.close(); os.unlink(p)

@@ -1,7 +1,11 @@
+import logging
 import os
 import sqlite3
+from datetime import datetime, timezone
 
 from . import config, sleeves
+
+LOGGER = logging.getLogger(__name__)
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS candles (
@@ -43,6 +47,12 @@ CREATE TABLE IF NOT EXISTS snapshots (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     at TEXT NOT NULL, mode TEXT NOT NULL, sleeve TEXT NOT NULL DEFAULT '',
     total_eur REAL NOT NULL, holdings TEXT NOT NULL, prices TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS inflight (
+    exchange_id TEXT PRIMARY KEY,       -- written the MOMENT the order is created, so a
+    decision_id INTEGER NOT NULL,       -- crash mid-fill leaves something to recover from
+    at TEXT NOT NULL, mode TEXT NOT NULL, sleeve TEXT NOT NULL,
+    pair TEXT NOT NULL, side TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS stops (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -95,6 +105,37 @@ def connect(path: str | None = None) -> sqlite3.Connection:
             conn.execute("INSERT INTO holdings(mode, sleeve, asset, amount) VALUES('live',?,'EUR',0)", (s,))
         conn.commit()
     return conn
+
+
+def backup(conn, path: str | None = None) -> dict:
+    """Write a crash-consistent copy of the ledger, and prune old ones.
+
+    VACUUM INTO is SQLite's own online-backup path: it produces a file that is
+    guaranteed to open, even though the app is writing at the time. Copying the
+    live WAL-mode file (cp, or a filesystem snapshot) usually works — which is
+    not the same as always (#41). This is the audit trail for real money; it
+    should not rest on 'usually'.
+    """
+    import glob
+    src = path or config.DB_PATH
+    os.makedirs(config.BACKUP_DIR, exist_ok=True)
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+    dest = os.path.join(config.BACKUP_DIR, f"magpie-{stamp}.db")
+    n = 1
+    while os.path.exists(dest):    # VACUUM INTO refuses to overwrite; two in the same second collide
+        dest = os.path.join(config.BACKUP_DIR, f"magpie-{stamp}-{n}.db")
+        n += 1
+    conn.execute("VACUUM INTO ?", (dest,))
+    size = os.path.getsize(dest)
+
+    kept = sorted(glob.glob(os.path.join(config.BACKUP_DIR, "magpie-*.db")))
+    pruned = []
+    while len(kept) > config.BACKUP_KEEP:
+        old = kept.pop(0)
+        os.remove(old)
+        pruned.append(os.path.basename(old))
+    LOGGER.info("ledger backed up to %s (%d KB); pruned %d", dest, size // 1024, len(pruned))
+    return {"file": dest, "bytes": size, "kept": len(kept), "pruned": pruned}
 
 
 def get_setting(conn, key: str, default: str | None = None) -> str | None:

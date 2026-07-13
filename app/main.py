@@ -21,6 +21,28 @@ except Exception as _e:  # noqa: BLE001 - never block startup on settings
     LOGGER.warning("settings override load failed: %s", _e)
 
 
+@app.on_event("startup")
+def _recover_interrupted_fills():
+    """Did we die mid-trade? A fill can take 90s; a deploy or crash inside that
+    window can leave a LIVE order at the exchange the books never saw (#40).
+    Adopt it or cancel it — before anything else is allowed to happen."""
+    conn = db.connect()
+    try:
+        done = portfolio.recover_inflight(conn, config.mode())
+        for r in done:
+            if r["outcome"] == "adopted":
+                ha.notify("Magpie recovered an interrupted trade",
+                          f"[{r['sleeve']}] {r['side']} {r['pair']} {r['amount']:.6f} @ "
+                          f"{r['price']:.4f} was in flight when the bot restarted — it had "
+                          f"filled, and is now booked.")
+            else:
+                LOGGER.warning("cancelled an unfilled order left in flight: %s", r)
+    except Exception as e:  # noqa: BLE001 - recovery must never block the app booting
+        LOGGER.warning("in-flight recovery failed: %s", e)
+    finally:
+        conn.close()
+
+
 @app.middleware("http")
 async def no_store(request, call_next):
     # browsers must never serve stale portfolio state (#4)
@@ -511,6 +533,16 @@ def api_state():
                 "equity_curve": list(reversed(curve)),
                 "trips": trips[:15], "trip_stats": ledger.trip_stats(trips),
                 "decisions": decisions, "skims": skims}
+    finally:
+        conn.close()
+
+
+@app.post("/api/backup")
+def api_backup():
+    """Write a crash-consistent copy of the ledger (#41)."""
+    conn = db.connect()
+    try:
+        return db.backup(conn)
     finally:
         conn.close()
 

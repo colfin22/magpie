@@ -21,7 +21,7 @@ COOKIE = "magpie_auth"
 # is gated.
 PUBLIC_PATHS = {"/login", "/health", "/favicon.ico", "/favicon.svg",
                 "/api/cycle", "/api/cycle/retry", "/api/digest", "/api/reconcile",
-                "/api/review", "/api/universe/refresh"}
+                "/api/review", "/api/universe/refresh", "/api/backup"}
 
 
 def _server_secret(conn) -> str:

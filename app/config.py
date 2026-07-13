@@ -102,6 +102,12 @@ TAKER_FEE = float(os.environ.get("TAKER_FEE", "0.004"))   # market-order fee (fa
 MAKER_FEE = float(os.environ.get("MAKER_FEE", "0.0025"))  # post-only limit fee (preferred fills)
 LIMIT_FILL_WAIT_S = int(os.environ.get("LIMIT_FILL_WAIT_S", "90"))  # patience before falling back to market
 
+# backups of the ledger. The DB is the audit trail — every prompt, decision, order
+# and fill. VACUUM INTO is SQLite's own online-backup path: safe against a live
+# writer, unlike copying a WAL-mode file out from under itself (#41).
+BACKUP_DIR = os.environ.get("BACKUP_DIR", "/data/backups")
+BACKUP_KEEP = int(os.environ.get("BACKUP_KEEP", "7"))
+
 # the DEEP brain (quarter, vault, monthly review). These calls are rare but want the
 # strongest model — and a free-tier key often has NO quota for the big model at all
 # (Gemini's free tier gives none for 2.5-pro), which fails those sleeves forever while
