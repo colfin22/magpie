@@ -532,6 +532,7 @@ def api_state():
                             "at": db.get_setting(conn, "lessons_at")},
                 "benchmark": ledger.bench_value(conn, config.mode(), prices),
                 "standings": arms.standings(conn, config.mode(), prices),
+                "credits": advisor.openrouter_credits(),   # cached; the arms' fuel gauge (#42)
                 "calibration": scoring.calibration(conn, config.mode()),
                 "stops": stops.open_stops(conn, config.mode()),
                 "equity_curve": list(reversed(curve)),
@@ -581,6 +582,7 @@ def api_arms():
     conn = db.connect()
     try:
         return {"standings": arms.standings(conn, config.mode(), market.tickers(config.PAIRS)),
+                "credits": advisor.openrouter_credits(),
                 "note": "shadow arms are simulated: fills assume the maker limit fills, "
                         "so they run mildly optimistic against a live bot that pays slippage"}
     finally:
@@ -910,8 +912,16 @@ async function load(){
   const bc = document.getElementById('board-card');
   if (board.length > 1) {
     bc.hidden = false;
-    document.getElementById('board-note').textContent =
-      board.some(r => r.key === 'coinflip' || r.kind === 'random') ? 'beat the coin flip' : '';
+    // the arms' fuel gauge: when OpenRouter credit runs dry every llm arm dies at
+    // once, and a dead arm looks exactly like a thoughtful one that keeps holding (#42)
+    const cr = s.credits;
+    const dead = board.filter(r => r.health && r.health.dead).map(r => r.key);
+    const notes = [];
+    if (dead.length) notes.push(`<span class="err">⚠ ${dead.join(', ')} not answering</span>`);
+    if (cr) notes.push(`<span class="${cr.remaining_usd < 1 ? 'down' : ''}">` +
+      `OpenRouter credit $${cr.remaining_usd.toFixed(2)}</span>`);
+    if (board.some(r => r.key === 'coinflip' || r.spec === 'random')) notes.push('beat the coin flip');
+    document.getElementById('board-note').innerHTML = notes.join(' · ');
     const BARS = {hodl: 'doing nothing', random: 'chance'};
     // every row names the model (or rule) that actually made its trades (#45) —
     // the brain's model is the whole variable under test, so the table must say it
@@ -922,13 +932,17 @@ async function load(){
       '<tbody class="mono">' +
       board.map(r => {
         const me = r.key === 'magpie';
-        const bar = BARS[r.key] || BARS[r.kind];
-        const desc = r.model || RULES[r.kind] || bar;
+        // kind is a clean category now (bot|rule|llm|bench); the raw spec is r.spec (#43)
+        const bar = BARS[r.key] || BARS[r.spec];
+        const desc = r.model || RULES[r.spec] || bar;
         const pl = r.pnl_eur;
+        // a dead arm must LOOK dead — a flat line reads as conviction otherwise (#42)
+        const dead = r.health && r.health.dead;
         return `<tr class="${me ? 'me' : (bar ? 'bar' : '')}">` +
           `<td><span class="dot" style="background:${COLOURS[r.key] || '#8b93a7'}"></span>` +
           `${me ? '<b>magpie (the brain)</b>' : r.key}` +
-          `${desc ? ` <span class="tag">— ${desc}</span>` : ''}</td>` +
+          `${desc ? ` <span class="tag">— ${desc}</span>` : ''}` +
+          `${dead ? ` <span class="err" title="${r.health.last_error || ''}">⚠ not answering</span>` : ''}</td>` +
           `<td class="tp">${me ? '<b>' : ''}${CCY}${r.equity_eur.toFixed(2)}${me ? '</b>' : ''}</td>` +
           `<td class="tp ${pl >= 0 ? 'up' : 'down'}">${pl >= 0 ? '+' : '−'}${CCY}${Math.abs(pl).toFixed(2)}` +
           `${r.pnl_pct === null ? '' : ` (${r.pnl_pct}%)`}</td>` +

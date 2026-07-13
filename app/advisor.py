@@ -172,6 +172,47 @@ def effective_model(provider: str | None = None, deep: bool = False,
                           brain=provider is None)
 
 
+_CREDITS: dict = {"at": 0.0, "val": None}
+CREDITS_TTL_S = 900     # the dashboard polls /api/state every 30s — do not hammer OpenRouter
+
+
+def openrouter_credits(http: httpx.Client | None = None) -> dict | None:
+    """Credit left on the OpenRouter account, or None if it can't be known (#42).
+
+    The llm arms run on a finite balance. When it empties they all die at once,
+    and a dead arm looks exactly like a thoughtful one that keeps holding. Show
+    the number while it still means something.
+
+    Cached: this is reached from the dashboard's 30s poll, and a balance that
+    moves in pennies a day does not need asking twice a minute.
+
+    Fail-soft on purpose: this is a status line, never a reason to break a page.
+    """
+    key = key_for("openrouter")
+    if not key:
+        return None
+    now = time.monotonic()
+    if _CREDITS["val"] is not None and now - _CREDITS["at"] < CREDITS_TTL_S:
+        return _CREDITS["val"]
+    own = http is None
+    http = http or httpx.Client(timeout=10)
+    try:
+        r = http.get("https://openrouter.ai/api/v1/credits",
+                     headers={"Authorization": f"Bearer {key}"})
+        r.raise_for_status()
+        d = r.json().get("data") or {}
+        total, used = float(d.get("total_credits") or 0), float(d.get("total_usage") or 0)
+        _CREDITS.update(at=now, val={"remaining_usd": round(total - used, 2),
+                                     "total_usd": round(total, 2)})
+        return _CREDITS["val"]
+    except Exception as e:  # noqa: BLE001 - a status line must never take the page down
+        LOGGER.warning("openrouter credit check failed: %s", _redact(str(e)))
+        return None
+    finally:
+        if own:
+            http.close()
+
+
 def model_id(model: str) -> str:
     """The bare model, stripped of whatever gateway routed to it.
 

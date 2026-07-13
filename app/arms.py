@@ -368,7 +368,33 @@ def run_all(conn, primary_mode: str, due_now: list[str], prices: dict,
         except Exception as e:  # noqa: BLE001 - shadows never touch the real bot
             LOGGER.warning("shadow arm %s failed this cycle: %s", arm["mode"], e)
             results.append({"arm": arm["name"], "status": "error", "detail": str(e)})
+        _announce_death(conn, arm)
     return results
+
+
+def _announce_death(conn, arm: dict) -> None:
+    """Say ONCE when an arm stops working, and once when it comes back (#42).
+
+    Not an alert storm — the live bot's health is what wakes anybody. But a dead
+    bake-off that is never mentioned is a bake-off that dies in silence and gets
+    read as a result months later. The flag is latched so a permanently dead arm
+    notifies once, not every six hours forever.
+    """
+    if arm["kind"] != "llm":
+        return
+    from . import ha   # local import: ha pulls config/db, and arms is imported early
+    flag, h = f"arm_dead_{arm['name']}", health(conn, arm["mode"])
+    was_dead = db.get_setting(conn, flag) == "1"
+    if h["dead"] and not was_dead:
+        db.set_setting(conn, flag, "1")
+        ha.notify(f"Magpie arm '{arm['name']}' has stopped answering",
+                  f"{h['consecutive_errors']} failed decisions in a row — "
+                  f"{h['last_error'] or 'the model is not responding'}. "
+                  f"It is not holding; it cannot answer. The bake-off is short one arm.")
+    elif not h["dead"] and was_dead:
+        db.set_setting(conn, flag, "0")
+        ha.notify(f"Magpie arm '{arm['name']}' is answering again",
+                  "It is back in the bake-off.")
 
 
 # ---------- the leaderboard (#32) ----------
@@ -380,8 +406,39 @@ def _curve(conn, mode: str, limit: int = 400) -> list[dict]:
     return [dict(r) for r in reversed(rows)]
 
 
+FAIL_STATUSES = ("error", "invalid", "no_key")
+DEAD_AFTER = 3   # consecutive failed decisions before an arm is called dead, not idle
+
+
+def health(conn, mode: str) -> dict:
+    """Is this arm working, or is it dead and only *looking* idle? (#42)
+
+    A shadow arm is deliberately excluded from the failure alerting — a broken
+    shadow is not a 3am problem — but that means a dead arm goes unnoticed: it
+    just stops trading, and the leaderboard shows a flat line, which reads as
+    CONVICTION rather than an expired API key. The whole bake-off can quietly
+    die and look like a result.
+
+    So: an arm whose recent decisions all failed is marked dead. An arm that
+    cannot answer must never be mistaken for one that chose not to.
+    """
+    rows = [dict(r) for r in conn.execute(
+        "SELECT status, detail FROM decisions WHERE mode=? ORDER BY id DESC LIMIT ?",
+        (mode, DEAD_AFTER))]
+    streak = 0
+    for r in rows:
+        if r["status"] not in FAIL_STATUSES:
+            break
+        streak += 1
+    last = advisor.explain(rows[0].get("detail") or "") if streak else None
+    return {"dead": streak >= DEAD_AFTER and len(rows) >= DEAD_AFTER,
+            "consecutive_errors": streak,
+            "last_error": (last or {}).get("text")}
+
+
 def _entry(conn, key: str, kind: str, mode: str, prices: dict, since: str | None,
-           model: str | None = None) -> dict:
+           model: str | None = None, spec: str | None = None,
+           provider: str | None = None, health_: dict | None = None) -> dict:
     if not since:   # the real bot has no seed date — its record starts at its first snapshot
         row = conn.execute("SELECT MIN(at) a FROM snapshots WHERE mode=?", (mode,)).fetchone()
         since = row["a"] if row else None
@@ -397,7 +454,11 @@ def _entry(conn, key: str, kind: str, mode: str, prices: dict, since: str | None
             "pnl_pct": round((equity - invested) / invested * 100, 1) if invested else None,
             "trades": trades,
             "win_rate_pct": stats["win_rate_pct"] if stats else None,
+            # kind is now a CLEAN category (bot|rule|llm|bench); the raw config string
+            # lives in `spec`, where the UI can ignore it (#43)
+            "spec": spec, "provider": provider,
             "model": model,   # which model actually decided this row's trades (#45)
+            "health": health_,   # working, or dead and only looking idle? (#42)
             "since": since, "curve": _curve(conn, mode)}
 
 
@@ -409,14 +470,19 @@ def standings(conn, primary_mode: str, prices: dict[str, float]) -> list[dict]:
     """
     rows = [_entry(conn, "magpie", "bot", primary_mode, prices,
                    db.get_setting(conn, "bot_since"),
-                   model=advisor.effective_model())]
+                   model=advisor.effective_model(),
+                   provider=advisor.active_provider())]
     for arm in enabled():
         if not conn.execute("SELECT 1 FROM sleeve_meta WHERE mode=?", (arm["mode"],)).fetchone():
             continue   # configured but not seeded yet — it starts at the next cycle
-        rows.append(_entry(conn, arm["name"], arm["spec"], arm["mode"], prices,
+        llm = arm["kind"] == "llm"
+        rows.append(_entry(conn, arm["name"], arm["kind"], arm["mode"], prices,
                            db.get_setting(conn, f"arm_since_{arm['name']}"),
+                           spec=arm["spec"],
+                           provider=arm.get("provider"),
                            model=advisor.effective_model(arm["provider"], override=arm["model"])
-                           if arm["kind"] == "llm" else None))
+                           if llm else None,
+                           health_=health(conn, arm["mode"]) if llm else None))
     bench = ledger.bench_value(conn, primary_mode, prices)
     if bench:
         rows.append({"key": "hodl", "kind": "bench", "mode": None,
@@ -424,5 +490,7 @@ def standings(conn, primary_mode: str, prices: dict[str, float]) -> list[dict]:
                      "pnl_eur": round(bench["hodl_eur"] - bench["invested"], 2),
                      "pnl_pct": round((bench["hodl_eur"] - bench["invested"])
                                       / bench["invested"] * 100, 1) if bench["invested"] else None,
-                     "trades": 0, "win_rate_pct": None, "since": bench["since"], "curve": []})
+                     "trades": 0, "win_rate_pct": None,
+                     "spec": None, "provider": None, "model": None, "health": None,
+                     "since": bench["since"], "curve": []})
     return sorted(rows, key=lambda r: r["equity_eur"], reverse=True)

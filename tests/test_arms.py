@@ -442,3 +442,63 @@ def test_keyless_arm_is_never_seeded_so_it_cannot_haunt_the_leaderboard(monkeypa
         assert "shadow:ghost" not in modes   # no books ever came into existence
     finally:
         conn.close(); os.unlink(p)
+
+
+# ---------- a dead arm must look dead, not idle (#42) ----------
+
+def _decide(conn, mode, status, detail=""):
+    conn.execute("INSERT INTO decisions (at, mode, sleeve, action, status, detail) "
+                 "VALUES (datetime('now'), ?, 'swing', 'hold', ?, ?)", (mode, status, detail))
+    conn.commit()
+
+
+def test_a_healthy_arm_is_not_called_dead():
+    conn, p = make_db()
+    try:
+        for _ in range(3):
+            _decide(conn, "shadow:claude", "held")
+        h = arms.health(conn, "shadow:claude")
+        assert not h["dead"]
+        assert h["consecutive_errors"] == 0
+    finally:
+        conn.close(); os.unlink(p)
+
+
+def test_an_arm_that_cannot_answer_is_dead_not_holding():
+    """The whole point: a flat line reads as conviction. It isn't — the model
+    never answered. Three straight failures and the arm is marked dead."""
+    conn, p = make_db()
+    try:
+        for _ in range(3):
+            _decide(conn, "shadow:claude", "error", "402 Insufficient credits")
+        h = arms.health(conn, "shadow:claude")
+        assert h["dead"]
+        assert h["consecutive_errors"] == 3
+        assert h["last_error"]
+    finally:
+        conn.close(); os.unlink(p)
+
+
+def test_one_bad_cycle_is_not_death():
+    conn, p = make_db()
+    try:
+        _decide(conn, "shadow:claude", "held")
+        _decide(conn, "shadow:claude", "held")
+        _decide(conn, "shadow:claude", "error", "503 overloaded")
+        h = arms.health(conn, "shadow:claude")
+        assert not h["dead"]              # a transient blip is not a corpse
+        assert h["consecutive_errors"] == 1
+    finally:
+        conn.close(); os.unlink(p)
+
+
+def test_a_recovered_arm_is_alive_again():
+    conn, p = make_db()
+    try:
+        for _ in range(3):
+            _decide(conn, "shadow:claude", "error", "402 Insufficient credits")
+        assert arms.health(conn, "shadow:claude")["dead"]
+        _decide(conn, "shadow:claude", "held")     # the key is topped up; it answers
+        assert not arms.health(conn, "shadow:claude")["dead"]
+    finally:
+        conn.close(); os.unlink(p)
