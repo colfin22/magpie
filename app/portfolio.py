@@ -320,6 +320,10 @@ def apply_topup(conn, mode: str, amount: float) -> dict:
         _set(conn, mode, s, config.BASE_CURRENCY, eur + per)
         conn.execute("UPDATE sleeve_meta SET allocated=allocated+?, hwm=hwm+? "
                      "WHERE mode=? AND sleeve=?", (per, per, mode, s))
+    # record it: a top-up that leaves no trace is cash the brain can't be told about,
+    # and undeployed top-up money is exactly how a sleeve ends up half asleep (#48)
+    conn.execute("INSERT INTO topups (at, mode, amount, per_sleeve) VALUES (?,?,?,?)",
+                 (_now(), mode, amount, per))
     conn.commit()
     try:  # the phantom hodler buys in with the same cash (#6)
         from . import ledger
@@ -328,6 +332,23 @@ def apply_topup(conn, mode: str, amount: float) -> dict:
         LOGGER.warning("benchmark top-up skipped: %s", e)
     LOGGER.info("[%s] top-up €%.2f split across active sleeves (€%.2f each)", mode, amount, per)
     return {"topup_eur": amount, "per_sleeve": per}
+
+
+def undeployed_topup(conn, mode: str, sleeve: str) -> dict | None:
+    """The most recent top-up, if this sleeve has not bought anything since it landed.
+
+    Top-up cash is the quiet way a sleeve falls asleep: it lands, raises the stake,
+    and then just sits there while the sleeve — already holding its coin — answers
+    HOLD about the position every cycle and never looks at the cash (#48). If the
+    sleeve HAS bought since, the money did its job and there is nothing to say.
+    """
+    row = conn.execute("SELECT at, amount, per_sleeve FROM topups WHERE mode=? "
+                       "ORDER BY id DESC LIMIT 1", (mode,)).fetchone()
+    if not row:
+        return None
+    bought = conn.execute("SELECT 1 FROM orders WHERE mode=? AND sleeve=? AND side='buy' "
+                          "AND at > ? LIMIT 1", (mode, sleeve, row["at"])).fetchone()
+    return None if bought else dict(row)
 
 
 def detect_topup(conn, mode: str) -> dict | None:

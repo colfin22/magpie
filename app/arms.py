@@ -287,7 +287,10 @@ def _ask_llm(conn, arm: dict, sleeve: str, port: dict, market_data: list[dict],
         min_order=max(portfolio.min_order_eur(p) for p in config.PAIRS),
         mandate=sleeves.MANDATES[sleeve],
         lessons=db.get_setting(conn, "lessons", "") or "",
-        extras=extras)
+        extras=extras,
+        # the arm sees its OWN books' idle cash — same question, its own answer.
+        # An arm given a different prompt is not a control (#48).
+        topup=portfolio.undeployed_topup(conn, arm["mode"], sleeve))
     raw = advisor.ask(prompt, deep=sleeve in DEEP_SLEEVES,
                       provider=arm["provider"], model=arm["model"])
     return advisor.validate(raw), prompt, raw

@@ -51,7 +51,8 @@ def run_sleeve(conn, mode: str, sleeve: str, prices: dict, market_data: list[dic
         min_order=max(portfolio.min_order_eur(p) for p in config.PAIRS),
         mandate=sleeves.MANDATES[sleeve],
         lessons=db.get_setting(conn, "lessons", "") or "",
-        extras=extras)
+        extras=extras,
+        topup=portfolio.undeployed_topup(conn, mode, sleeve))
     try:
         raw = advisor.ask(prompt, deep=sleeve in DEEP_SLEEVES)
     except advisor.AdvisorError as e:

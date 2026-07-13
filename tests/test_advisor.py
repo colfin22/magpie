@@ -192,3 +192,45 @@ def test_exhausted_retries_redact_api_key(monkeypatch):
 
 def test_redact_strips_api_key():
     assert advisor._redact("...?key=AQ.abc-123 more") == "...?key=REDACTED more"
+
+
+# ---------- idle cash must be visible, not buried in JSON (#48) ----------
+
+def _prompt(holdings, total, min_order=10.0, topup=None):
+    port = {"sleeve": "swing", "total_eur": total, "holdings": holdings, "allocated": total}
+    return advisor.build_prompt(port, [], [], min_order=min_order,
+                                mandate="swing", topup=topup)
+
+
+def test_idle_cash_is_named_and_quantified():
+    p = _prompt({"EUR": 15.93, "TRX": {"amount": 55.0, "eur_value": 16.0}}, 31.93)
+    assert "Idle cash" in p
+    assert "15.93" in p
+    assert "50%" in p                    # the share is the part that stings
+    assert "Cash is a position too" in p
+
+
+def test_a_fully_deployed_sleeve_is_not_nagged():
+    p = _prompt({"EUR": 0.0, "TRX": {"amount": 110.0, "eur_value": 32.0}}, 32.0)
+    assert "Idle cash" not in p
+
+
+def test_cash_below_the_exchange_minimum_is_not_nagged():
+    """It CANNOT be deployed — telling the brain to spend it would only provoke a
+    buy the exchange must reject."""
+    p = _prompt({"EUR": 3.10, "TRX": {"amount": 100.0, "eur_value": 29.0}}, 32.1, min_order=10.0)
+    assert "Idle cash" not in p
+
+
+def test_an_undeployed_topup_is_flagged_with_its_date():
+    p = _prompt({"EUR": 15.93, "TRX": {"amount": 55.0, "eur_value": 16.0}}, 31.93,
+                topup={"at": "2026-07-12T06:00:00+00:00", "amount": 47.9, "per_sleeve": 15.96})
+    assert "top-up" in p
+    assert "15.96" in p
+    assert "2026-07-12" in p
+
+
+def test_no_topup_note_when_none_is_outstanding():
+    p = _prompt({"EUR": 15.93, "TRX": {"amount": 55.0, "eur_value": 16.0}}, 31.93, topup=None)
+    assert "Idle cash" in p          # still nagged about the cash...
+    assert "top-up" not in p         # ...but no top-up is invented

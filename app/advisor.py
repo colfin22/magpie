@@ -54,7 +54,7 @@ Rules you must follow:
 
 Current portfolio:
 {portfolio}
-
+{cash}
 Market data:
 {market}
 
@@ -70,6 +70,14 @@ Answer with ONLY a JSON object, no other text:
   "fraction": <0.0-1.0 or null>, "confidence": <0.0-1.0>,{stop_field}
   "reasoning": "<one or two sentences>"}}"""
 
+CASH_BLOCK = """
+Idle cash: {sym}{cash:.2f} — {pct:.0f}% of this sleeve, earning nothing.{topup}
+Cash is a position too: holding it is a bet that you will buy cheaper later. That
+can be the right call — but make it deliberately. If you are holding this much cash
+on purpose, say so in your reasoning. If you are not, deploy it."""
+
+TOPUP_NOTE = " A top-up of {sym}{amount:.2f} was added to this sleeve on {when} and has not been deployed since."
+
 STOP_BLOCK = """
 Stop-losses are ON. When you BUY you may add "stop_loss_pct": how far below your entry
 a protective sell should rest AT THE EXCHANGE, so it protects the position even if this
@@ -83,7 +91,24 @@ class AdvisorError(RuntimeError):
 
 def build_prompt(portfolio: dict, market_data: list[dict], history: list[dict],
                  min_order: float, mandate: str = "", lessons: str = "",
-                 extras: dict | None = None) -> str:
+                 extras: dict | None = None, topup: dict | None = None) -> str:
+    # Idle cash was invisible: the portfolio went in as raw JSON and nothing named
+    # the dead money in it, so a sleeve that had already bought would answer HOLD
+    # about its POSITION and never notice the cash beside it. Half the portfolio sat
+    # undeployed for days that way (#48). Say it plainly, and let the brain choose.
+    cash_block = ""
+    held = portfolio.get("holdings") or {}
+    cash = float(held.get(config.BASE_CURRENCY) or 0)
+    total = float(portfolio.get("total_eur") or 0)
+    # below the exchange minimum it CANNOT be deployed — nagging about it would only
+    # provoke a buy that can only be rejected
+    if total > 0 and cash >= min_order:
+        note = ""
+        if topup:
+            note = TOPUP_NOTE.format(sym=config.symbol(), amount=topup["per_sleeve"],
+                                     when=str(topup["at"])[:10])
+        cash_block = CASH_BLOCK.format(sym=config.symbol(), cash=cash,
+                                       pct=cash / total * 100, topup=note)
     stops_block = stop_field = ""
     if config.STOP_LOSS_ENABLED:   # unmentioned, and so unchanged, when off
         stops_block = STOP_BLOCK.format(lo=config.STOP_LOSS_MIN_PCT, hi=config.STOP_LOSS_MAX_PCT,
@@ -101,6 +126,7 @@ def build_prompt(portfolio: dict, market_data: list[dict], history: list[dict],
         pairs=", ".join(config.PAIRS),
         min_order=min_order,
         portfolio=json.dumps(portfolio, indent=1),
+        cash=cash_block,
         market=json.dumps(market_data, indent=1),
         extras=json.dumps(extras, indent=1) if extras else "(none)",
         stops=stops_block, stop_field=stop_field,

@@ -1,6 +1,6 @@
 import os
 import tempfile
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -459,5 +459,43 @@ def test_the_diary_shows_only_the_real_bot_and_only_24h(monkeypatch):
         assert "real" in said                    # the bot's own recent decision
         assert "a coin flip" not in said         # a shadow arm must never look like a real trade
         assert "ancient" not in said             # older than 24h
+    finally:
+        conn.close(); os.unlink(p)
+
+
+# ---------- an undeployed top-up is the quiet way a sleeve falls asleep (#48) ----------
+
+def test_topup_is_recorded_and_flagged_until_the_sleeve_buys():
+    conn, p = make_db()
+    try:
+        portfolio.apply_topup(conn, "paper", 47.90)
+        row = conn.execute("SELECT amount, per_sleeve FROM topups").fetchone()
+        assert row["amount"] == 47.90
+        assert row["per_sleeve"] == round(47.90 / 3, 2)
+
+        # nothing bought since -> the cash is still sitting there, and the brain is told
+        t = portfolio.undeployed_topup(conn, "paper", "swing")
+        assert t and t["per_sleeve"] == round(47.90 / 3, 2)
+
+        # ...the sleeve buys -> the money did its job, and the note stops
+        # the app stamps every row with an ISO-8601 'T' timestamp; SQLite's datetime()
+        # emits a SPACE separator, which sorts BEFORE 'T' and would silently break the
+        # "has this sleeve bought since?" comparison. Write it the way production does.
+        later = (datetime.now(timezone.utc) + timedelta(minutes=1)).isoformat(timespec="seconds")
+        conn.execute("INSERT INTO orders (at, mode, sleeve, pair, side, amount, price, cost, fee) "
+                     "VALUES (?,'paper','swing','TRX/EUR','buy',1,1,1,0)", (later,))
+        conn.commit()
+        assert portfolio.undeployed_topup(conn, "paper", "swing") is None
+
+        # ...but the OTHER sleeves' cash is still asleep
+        assert portfolio.undeployed_topup(conn, "paper", "fortnight") is not None
+    finally:
+        conn.close(); os.unlink(p)
+
+
+def test_no_topup_means_nothing_to_flag():
+    conn, p = make_db()
+    try:
+        assert portfolio.undeployed_topup(conn, "paper", "swing") is None
     finally:
         conn.close(); os.unlink(p)
