@@ -359,3 +359,50 @@ def test_unsellable_dust_is_counted_but_is_not_a_position(monkeypatch):
         assert v["total_eur"] == round(16.67 + 0.26 + 30.0, 2)   # and still counted in the total
     finally:
         conn.close(); os.unlink(p)
+
+
+def test_live_books_what_the_exchange_settled_not_what_we_modelled(monkeypatch):
+    """The books used to MODEL the fill: assume the touch price, and assume the fee
+    comes out of the cash before buying. Kraken does neither — you receive the full
+    amount you bought, the fee is charged on top, and the price is whatever you got.
+    Every trade therefore disagreed with reality (#39)."""
+    conn, p = make_db()
+    monkeypatch.setattr(portfolio, "min_order_eur", lambda pair: 1.0)
+    monkeypatch.setattr(market, "touch", lambda pair: {"bid": 0.29, "ask": 0.29, "last": 0.29})
+    # the exchange says: 54.6912871 TRX landed, at 0.29, and it charged €0.0635 on top
+    monkeypatch.setattr(portfolio, "_live_fill", lambda pair, side, amount, px: {
+        "id": "O2KK2U", "filled": 54.6912871, "cost": 15.8604, "price": 0.29,
+        "fee_quote": 0.0635, "fee_base": 0.0})
+    try:
+        conn.execute("UPDATE holdings SET amount=31.80 WHERE mode='live' AND sleeve='quarter' AND asset='EUR'")
+        conn.commit()
+        out = portfolio.execute(conn, "live", "quarter", 1, "buy", "TRX/EUR", 0.5,
+                                {"TRX/EUR": 0.29})
+        h = portfolio.holdings(conn, "live", "quarter")
+        assert h["TRX"] == 54.6912871                      # exactly what Kraken credited
+        assert round(h["EUR"], 4) == round(31.80 - (15.8604 + 0.0635), 4)   # cost + fee, on top
+        assert out["fee_eur"] == 0.06                      # the fee it really charged
+    finally:
+        conn.close(); os.unlink(p)
+
+
+def test_paper_mirrors_krakens_fee_convention(monkeypatch):
+    """Simulation must match reality or the shadow arms are measuring a different game:
+    the fee is charged ON TOP, so the cash leaving the sleeve is exactly what it spent."""
+    conn, p = make_db()
+    monkeypatch.setattr(portfolio, "min_order_eur", lambda pair: 1.0)
+    monkeypatch.setattr(market, "touch", lambda pair: {"bid": 100.0, "ask": 100.0, "last": 100.0})
+    try:
+        before = portfolio.holdings(conn, "paper", "swing")["EUR"]
+        out = portfolio.execute(conn, "paper", "swing", 1, "buy", "BTC/EUR", 0.5,
+                                {"BTC/EUR": 100.0})
+        after = portfolio.holdings(conn, "paper", "swing")
+        spent = before - after["EUR"]
+        assert round(spent, 6) == round(before * 0.5, 6)          # exactly the budget, no more
+        # coins bought + the fee charged on top == the cash that left (out["fee_eur"] is
+        # rounded for display, so check against the real arithmetic, not the display value)
+        cost = after["BTC"] * 100.0
+        assert round(cost * (1 + config.MAKER_FEE), 6) == round(spent, 6)
+        assert out["fee_eur"] == round(cost * config.MAKER_FEE, 2)
+    finally:
+        conn.close(); os.unlink(p)

@@ -84,65 +84,115 @@ def min_order_eur(pair: str) -> float:
         return 10.0
 
 
-def _live_fill(pair: str, side: str, amount: float, limit_price: float) -> tuple[str | None, float]:
+def _settle(ex, pair: str, order_ids: list[str]) -> dict:
+    """Ask the exchange what actually happened across the orders we placed.
+
+    The books used to MODEL the fill (assume the touch price, assume the fee comes
+    out of the cash before buying). Kraken does neither: you receive the full
+    amount you bought, the fee is charged on top in the quote currency, and the
+    price is whatever you got. Modelling it made every trade disagree with reality
+    and quietly leaked the difference into the nightly reconcile as "drift" (#39).
+    """
+    filled = cost = fee_quote = fee_base = 0.0
+    for oid in [o for o in order_ids if o]:
+        try:
+            o = ex.fetch_order(oid, pair)
+        except Exception as e:  # noqa: BLE001 - one unreadable order must not lose the rest
+            LOGGER.warning("could not read order %s back: %s", oid, e)
+            continue
+        filled += float(o.get("filled") or 0)
+        cost += float(o.get("cost") or 0)          # quote actually exchanged
+        f = o.get("fee") or {}
+        fees = o.get("fees") or ([f] if f else [])
+        for one in fees:
+            amt = float(one.get("cost") or 0)
+            cur = (one.get("currency") or "").upper()
+            if not amt:
+                continue
+            if cur == pair.split("/")[0].upper():
+                fee_base += amt      # some venues charge the fee in the coin itself
+            else:
+                fee_quote += amt     # Kraken: in the quote currency (EUR)
+    price = (cost / filled) if filled else 0.0
+    return {"filled": filled, "cost": cost, "fee_quote": fee_quote,
+            "fee_base": fee_base, "price": price}
+
+
+def _live_fill(pair: str, side: str, amount: float, limit_price: float) -> dict:
     """Place a post-only limit at the touch; fall back to market if unfilled.
 
-    Returns (exchange_id, fee_rate_actually_paid). Maker fills save ~0.15%
-    per side over market orders — free money on every patient fill.
+    Maker fills save ~0.15% per side over market orders — free money on every
+    patient fill. Returns the SETTLED truth from the exchange, not an estimate.
     """
     import time as _t
     ex = market.exchange()
+    ids: list[str] = []
     try:
         o = ex.create_order(pair, "limit", side, amount, limit_price, {"postOnly": True})
+        ids.append(o.get("id"))
     except Exception as e:  # noqa: BLE001 - post-only rejected (would cross) -> just take
         LOGGER.info("post-only rejected (%s) — going to market", e)
         o = ex.create_order(pair, "market", side, amount)
-        return o.get("id"), config.TAKER_FEE
+        return {"id": o.get("id"), **_settle(ex, pair, [o.get("id")])}
+
     deadline = _t.time() + config.LIMIT_FILL_WAIT_S
     while _t.time() < deadline:
         _t.sleep(5)
-        st = ex.fetch_order(o["id"], pair)
+        st = ex.fetch_order(ids[0], pair)
         if st.get("status") == "closed":
-            return o["id"], config.MAKER_FEE
+            return {"id": ids[0], **_settle(ex, pair, ids)}
     try:
-        ex.cancel_order(o["id"], pair)
+        ex.cancel_order(ids[0], pair)
     except Exception:  # noqa: BLE001 - may have filled in the race; checked below
         pass
-    st = ex.fetch_order(o["id"], pair)
+    st = ex.fetch_order(ids[0], pair)
     filled = float(st.get("filled") or 0)
     if filled >= amount * 0.999:
-        return o["id"], config.MAKER_FEE
+        return {"id": ids[0], **_settle(ex, pair, ids)}
     remainder = amount - filled
     LOGGER.info("limit unfilled after %ss (%.6f of %.6f) — market for the rest",
                 config.LIMIT_FILL_WAIT_S, filled, amount)
     o2 = ex.create_order(pair, "market", side, remainder)
-    # blended fee, weighted by how much each path filled
-    rate = (filled * config.MAKER_FEE + remainder * config.TAKER_FEE) / amount
-    return o2.get("id"), rate
+    ids.append(o2.get("id"))
+    return {"id": o2.get("id"), **_settle(ex, pair, ids)}   # blended across both fills
 
 
 def execute(conn, mode: str, sleeve: str, decision_id: int, action: str, pair: str,
             fraction: float, prices: dict[str, float], stop_pct: float | None = None) -> dict:
     """Execute a validated buy/sell inside one sleeve's books.
 
-    Fills aim for maker pricing: a post-only limit at the current touch
-    (paper mode assumes the maker fill at that price)."""
+    Fills aim for maker pricing: a post-only limit at the current touch.
+
+    In LIVE mode the books record what the exchange actually settled — the filled
+    amount, the average price it really got, and the fee it really charged. In
+    paper/shadow we mirror the same convention Kraken uses (#39): you receive the
+    full amount you bought and the fee is charged ON TOP, so the total cash leaving
+    the sleeve is exactly what it decided to spend."""
     t = market.touch(pair)
     asset = pair.split("/")[0]
     h = holdings(conn, mode, sleeve)
     if action == "buy":
         price = t["bid"]
-        spend = h.get(config.BASE_CURRENCY, 0.0) * fraction
+        cash = h.get(config.BASE_CURRENCY, 0.0)
+        spend = cash * fraction                      # the total this sleeve is willing to part with
         if spend < min_order_eur(pair):
             raise ValueError(f"buy of {config.symbol()}{spend:.2f} is under the {config.symbol()}{min_order_eur(pair):.0f} exchange minimum")
-        amount = (spend * (1 - config.MAKER_FEE)) / price
+        # size so that cost + fee == spend, because the fee is charged on top
+        amount = spend / (price * (1 + config.MAKER_FEE))
         if mode == "live":
-            exchange_id, fee_rate = _live_fill(pair, "buy", amount, price)
+            f = _live_fill(pair, "buy", amount, price)
+            exchange_id = f["id"]
+            amount = f["filled"] - f["fee_base"]     # what actually landed in the account
+            price = f["price"] or price
+            fee = f["fee_quote"]
+            spend = f["cost"] + fee                  # what actually left it
         else:
-            exchange_id, fee_rate = None, config.MAKER_FEE
-        fee = spend * fee_rate
-        amount = (spend - fee) / price
-        _set(conn, mode, sleeve, config.BASE_CURRENCY, h.get(config.BASE_CURRENCY, 0.0) - spend)
+            exchange_id = None
+            fee = amount * price * config.MAKER_FEE
+            spend = amount * price + fee
+        if amount <= 0:
+            raise ValueError(f"buy of {pair} filled nothing")
+        _set(conn, mode, sleeve, config.BASE_CURRENCY, cash - spend)
         _set(conn, mode, sleeve, asset, h.get(asset, 0.0) + amount)
     elif action == "sell":
         # clear this sleeve's resting stops on this pair FIRST. The sleeves are
@@ -159,10 +209,15 @@ def execute(conn, mode: str, sleeve: str, decision_id: int, action: str, pair: s
         if amount <= 0 or proceeds < 1.0:
             raise ValueError(f"nothing meaningful to sell ({asset} balance {h.get(asset, 0.0)})")
         if mode == "live":
-            exchange_id, fee_rate = _live_fill(pair, "sell", amount, price)
+            f = _live_fill(pair, "sell", amount, price)
+            exchange_id = f["id"]
+            amount = f["filled"]                     # what actually left the account
+            price = f["price"] or price
+            fee = f["fee_quote"]
+            proceeds = f["cost"]                     # gross quote received
         else:
-            exchange_id, fee_rate = None, config.MAKER_FEE
-        fee = proceeds * fee_rate
+            exchange_id = None
+            fee = proceeds * config.MAKER_FEE
         _set(conn, mode, sleeve, asset, h.get(asset, 0.0) - amount)
         _set(conn, mode, sleeve, config.BASE_CURRENCY, h.get(config.BASE_CURRENCY, 0.0) + proceeds - fee)
         # a PARTIAL sell leaves coins behind. Their stop was just cancelled, so put a
