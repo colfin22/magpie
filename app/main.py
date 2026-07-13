@@ -768,6 +768,9 @@ def dashboard():
   <button onclick="if(confirm('Halt all trading?'))fetch('/api/halt',{method:'POST'}).then(()=>load())">⛔ HALT TRADING</button>
   <span class="dim" id="halted"></span></div>
 
+<p style="text-align:center;color:var(--faint);font-size:12.5px;font-style:italic;
+          margin:22px 0 4px">The magpie trades alone; the consequences are its keeper's.</p>
+
 </div>
 <script>
 async function load(){
