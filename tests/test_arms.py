@@ -597,3 +597,88 @@ def test_an_arm_matching_the_brains_deep_model_is_the_brain(monkeypatch):
     # but on the deep sleeves the brain runs gemini-2.5-pro... and so would this arm
     monkeypatch.setattr(config, "SHADOW_ARMS", "twin:llm:gemini@gemini-2.5-pro", raising=False)
     assert arms.enabled() == []      # caught: it IS the brain on the deep sleeves
+
+
+# ---------- a retired arm keeps its record, and its capital (#54) ----------
+
+def _seed(conn, mode, cash=100.0):
+    for s in sleeves.ALL:
+        conn.execute("INSERT INTO sleeve_meta (mode, sleeve, allocated, hwm) VALUES (?,?,?,?)",
+                     (mode, s, cash if s in sleeves.ACTIVE else 0.0, 0.0))
+        conn.execute("INSERT INTO holdings (mode, sleeve, asset, amount) VALUES (?,?,?,?)",
+                     (mode, s, config.BASE_CURRENCY, cash if s in sleeves.ACTIVE else 0.0))
+    conn.commit()
+
+
+def test_a_retired_arm_keeps_its_record_and_says_why(monkeypatch):
+    """Rotate a key and a real, funded, months-old record must not vanish from the
+    leaderboard without a word."""
+    stub_market(monkeypatch)
+    monkeypatch.setattr(config, "SHADOW_ARMS", "gpt:llm:openai", raising=False)
+    monkeypatch.setattr(config, "LLM_PROVIDER", "gemini", raising=False)
+    monkeypatch.setattr(config, "OPENAI_API_KEY", "k", raising=False)
+    conn, p = make_db()
+    try:
+        _seed(conn, "shadow:gpt")
+        assert [a["name"] for a in arms.enabled()] == ["gpt"]
+        assert arms.retired(conn) == []
+
+        monkeypatch.setattr(config, "OPENAI_API_KEY", "", raising=False)   # key rotated out
+        assert arms.enabled() == []                                        # stops trading...
+        r = arms.retired(conn)
+        assert [a["name"] for a in r] == ["gpt"]                           # ...but is not erased
+        assert r[0]["retired_because"] == "no API key"
+
+        st = arms.standings(conn, "live", PRICES)
+        gpt = [x for x in st if x["key"] == "gpt"]
+        assert gpt and gpt[0]["retired"] == "no API key"    # still on the table, marked
+    finally:
+        conn.close(); os.unlink(p)
+
+
+def test_a_retired_arm_still_gets_the_topup_so_it_can_come_back_comparable(monkeypatch):
+    """An arm that sat out a top-up returns permanently under-capitalised — its curve
+    then lower for a reason that has nothing to do with its decisions, which is the one
+    thing the leaderboard exists to isolate."""
+    stub_market(monkeypatch)
+    monkeypatch.setattr(config, "SHADOW_ARMS", "gpt:llm:openai", raising=False)
+    monkeypatch.setattr(config, "LLM_PROVIDER", "gemini", raising=False)
+    monkeypatch.setattr(config, "OPENAI_API_KEY", "", raising=False)   # retired: no key
+    conn, p = make_db()
+    try:
+        _seed(conn, "shadow:gpt", cash=100.0)
+        before = portfolio.holdings(conn, "shadow:gpt", "swing")[config.BASE_CURRENCY]
+        arms.mirror_topup(conn, 300.0, "live")
+        after = portfolio.holdings(conn, "shadow:gpt", "swing")[config.BASE_CURRENCY]
+        assert after == before + 100.0, "a retired arm missed the top-up and can never catch up"
+    finally:
+        conn.close(); os.unlink(p)
+
+
+# ---------- the death that writes no decision at all (#55) ----------
+
+def test_an_arm_that_has_gone_silent_while_the_bot_decides_is_dead():
+    """If an arm blows up ABOVE run_sleeve — seeding, stops-sync, snapshotting — it writes
+    no decision row at all. Its last rows stay green and it shows the flat line #42 exists
+    to prevent."""
+    conn, p = make_db()
+    try:
+        _fail(conn, "shadow:claude", "held", _stamp(60 * 40))     # last spoke 40h ago, happily
+        _fail(conn, "live", "held", _stamp(60 * 30))              # the bot has kept deciding
+        _fail(conn, "live", "held", _stamp(5))
+        h = arms.health(conn, "shadow:claude", "live")
+        assert h["dead"]
+        assert "no decision" in h["last_error"]
+    finally:
+        conn.close(); os.unlink(p)
+
+
+def test_a_quiet_arm_is_not_dead_if_the_bot_is_quiet_too():
+    """A sleeve that simply wasn't due, or a bot that hasn't run, is not a dead arm."""
+    conn, p = make_db()
+    try:
+        _fail(conn, "shadow:claude", "held", _stamp(300))
+        _fail(conn, "live", "held", _stamp(290))     # bot decided ~same time; nothing is wrong
+        assert not arms.health(conn, "shadow:claude", "live")["dead"]
+    finally:
+        conn.close(); os.unlink(p)

@@ -938,11 +938,15 @@ async function load(){
         const pl = r.pnl_eur;
         // a dead arm must LOOK dead — a flat line reads as conviction otherwise (#42)
         const dead = r.health && r.health.dead;
-        return `<tr class="${me ? 'me' : (bar ? 'bar' : '')}">` +
+        // a retired arm keeps its record on the table but is plainly out of the running:
+        // deleting the row would erase a real months-long history the moment a key
+        // rotated, and leaving it unmarked would rank a frozen record as a live one (#54)
+        return `<tr class="${me ? 'me' : (bar || r.retired ? 'bar' : '')}">` +
           `<td><span class="dot" style="background:${COLOURS[r.key] || '#8b93a7'}"></span>` +
           `${me ? '<b>magpie (the brain)</b>' : r.key}` +
           `${desc ? ` <span class="tag">— ${desc}</span>` : ''}` +
-          `${dead ? ` <span class="err" title="${r.health.last_error || ''}">⚠ not answering</span>` : ''}</td>` +
+          `${r.retired ? ` <span class="tag">— retired: ${r.retired}</span>` : ''}` +
+          `${dead && !r.retired ? ` <span class="err" title="${r.health.last_error || ''}">⚠ not answering</span>` : ''}</td>` +
           `<td class="tp">${me ? '<b>' : ''}${CCY}${r.equity_eur.toFixed(2)}${me ? '</b>' : ''}</td>` +
           `<td class="tp ${pl >= 0 ? 'up' : 'down'}">${pl >= 0 ? '+' : '−'}${CCY}${Math.abs(pl).toFixed(2)}` +
           `${r.pnl_pct === null ? '' : ` (${r.pnl_pct}%)`}</td>` +

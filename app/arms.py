@@ -203,6 +203,30 @@ def is_unconfigured(arm: dict) -> bool:
     return arm["kind"] == "llm" and not advisor.key_for(arm["provider"])
 
 
+def is_seeded(conn, arm: dict) -> bool:
+    return bool(conn.execute("SELECT 1 FROM sleeve_meta WHERE mode=?",
+                             (arm["mode"],)).fetchone())
+
+
+def retired(conn) -> list[dict]:
+    """Arms that have a funded record but are no longer trading — and WHY (#54).
+
+    An arm goes quiet when its model becomes the brain, or when its key is rotated
+    out. Its books, orders, decisions and equity curve all remain; only its future
+    stops. Dropping it from the leaderboard would delete a real, months-long record
+    from view the instant a key changed, with nothing to say it ever existed.
+
+    So it stays on the table, marked, and out of the running.
+    """
+    out = []
+    for arm in parse(config.SHADOW_ARMS):
+        why = ("it is now the brain" if is_the_brain(arm)
+               else "no API key" if is_unconfigured(arm) else None)
+        if why and is_seeded(conn, arm):
+            out.append({**arm, "retired_because": why})
+    return out
+
+
 def enabled() -> list[dict]:
     """The configured arms, minus the brain (#46) and minus any with no key (#47).
 
@@ -245,11 +269,21 @@ def ensure_seeded(conn, arm: dict, primary_mode: str) -> bool:
 
 def mirror_topup(conn, amount: float, primary_mode: str) -> None:
     """Fresh cash reaches every arm too. Without this the arms fall behind the
-    real bot's capital and the equity curves stop being comparable."""
-    for arm in enabled():
+    real bot's capital and the equity curves stop being comparable.
+
+    Including the RETIRED ones. An arm that is quiet today (its model became the
+    brain, its key was rotated out) may be back tomorrow, and an arm that sat out
+    a top-up comes back permanently under-capitalised — its equity curve then
+    lower for a reason that has nothing to do with its decisions, which is the one
+    thing this table exists to isolate. Cash parity is what makes the curves
+    comparable; it must not depend on who happens to be trading this week (#54).
+    """
+    for arm in enabled() + retired(conn):
         try:
-            if ensure_seeded(conn, arm, primary_mode):
-                continue   # seeded from the real bot's stake, which already includes this cash
+            if not is_seeded(conn, arm):
+                # only a LIVE arm may be seeded into existence by a top-up
+                if ensure_seeded(conn, arm, primary_mode):
+                    continue   # seeded from the bot's stake, which already includes this cash
             portfolio.apply_topup(conn, arm["mode"], amount)
         except Exception as e:  # noqa: BLE001 - an arm must never break a real top-up
             LOGGER.warning("arm %s missed the top-up: %s", arm["mode"], e)
@@ -383,13 +417,13 @@ def run_all(conn, primary_mode: str, due_now: list[str], prices: dict,
         # health check (a locked DB, a notifier) would abort every arm still to run.
         # "A failure is logged and stepped over" has to hold for this line too.
         try:
-            _announce_death(conn, arm)
+            _announce_death(conn, arm, primary_mode)
         except Exception as e:  # noqa: BLE001 - a status notice is never worth a cycle
             LOGGER.warning("arm %s health announcement failed: %s", arm["mode"], e)
     return results
 
 
-def _announce_death(conn, arm: dict) -> None:
+def _announce_death(conn, arm: dict, primary_mode: str) -> None:
     """Say ONCE when an arm stops working, and once when it comes back (#42).
 
     Not an alert storm — the live bot's health is what wakes anybody. But a dead
@@ -400,7 +434,7 @@ def _announce_death(conn, arm: dict) -> None:
     if arm["kind"] != "llm":
         return
     from . import ha   # local import: ha pulls config/db, and arms is imported early
-    flag, h = f"arm_dead_{arm['name']}", health(conn, arm["mode"])
+    flag, h = f"arm_dead_{arm['name']}", health(conn, arm["mode"], primary_mode)
     was_dead = db.get_setting(conn, flag) == "1"
     if h["dead"] and not was_dead:
         db.set_setting(conn, flag, "1")
@@ -429,9 +463,12 @@ def _curve(conn, mode: str, limit: int = 400) -> list[dict]:
 FAIL_STATUSES = ("error", "invalid", "no_key")
 DEAD_AFTER = 3          # consecutive failed decisions before an arm is called dead
 DEAD_SPAN_MINS = 60     # ...and they must span more than one cycle
+SILENT_AFTER_MINS = 750 # an arm silent this long while the bot decides is dead too (#55)
+                        # — comfortably past the 6h swing cadence, so a skipped slot or a
+                        # sleeve that simply wasn't due never reads as death
 
 
-def health(conn, mode: str) -> dict:
+def health(conn, mode: str, primary_mode: str | None = None) -> dict:
     """Is this arm working, or is it dead and only *looking* idle? (#42)
 
     A shadow arm is deliberately excluded from the failure alerting — a broken
@@ -464,9 +501,39 @@ def health(conn, mode: str) -> dict:
         except (TypeError, ValueError):   # an unparseable stamp must not fake a death
             spanned = False
     last = advisor.explain(rows[0].get("detail") or "") if streak else None
-    return {"dead": streak >= DEAD_AFTER and spanned,
-            "consecutive_errors": streak,
-            "last_error": (last or {}).get("text")}
+    dead = streak >= DEAD_AFTER and spanned
+    reason = (last or {}).get("text")
+    # The death this check was written for can arrive through a door it cannot see:
+    # if the arm blows up ABOVE run_sleeve — seeding, stops-sync, snapshotting — it
+    # writes no decision row AT ALL. Its last rows stay green, health says "fine", and
+    # the leaderboard shows the flat line #42 exists to prevent. So: an arm that has
+    # gone quiet while the real bot kept deciding is dead, whatever its last row says (#55).
+    if not dead and primary_mode:
+        mute = _gone_quiet(conn, mode, primary_mode)
+        if mute:
+            dead, reason = True, mute
+    return {"dead": dead, "consecutive_errors": streak, "last_error": reason}
+
+
+def _gone_quiet(conn, mode: str, primary_mode: str) -> str | None:
+    """The arm has stopped writing decisions at all, while the bot keeps deciding."""
+    def latest(m):
+        r = conn.execute("SELECT MAX(at) a FROM decisions WHERE mode=?", (m,)).fetchone()
+        return r["a"] if r else None
+
+    bot, arm = latest(primary_mode), latest(mode)
+    if not bot:
+        return None                  # the bot itself hasn't decided; nothing to compare
+    if arm is None:
+        return "it has never recorded a decision"
+    try:
+        gap = datetime.fromisoformat(bot) - datetime.fromisoformat(arm)
+    except (TypeError, ValueError):
+        return None                  # an unparseable stamp must not fake a death
+    if gap >= timedelta(minutes=SILENT_AFTER_MINS):
+        return (f"it has recorded no decision for {int(gap.total_seconds() // 3600)}h "
+                f"while the bot kept deciding")
+    return None
 
 
 def _entry(conn, key: str, kind: str, mode: str, prices: dict, since: str | None,
@@ -527,7 +594,16 @@ def standings(conn, primary_mode: str, prices: dict[str, float]) -> list[dict]:
                            spec=arm["spec"],
                            provider=arm.get("provider"),
                            model=_label(arm["provider"], arm["model"]) if llm else None,
-                           health_=health(conn, arm["mode"]) if llm else None))
+                           health_=health(conn, arm["mode"], primary_mode) if llm else None))
+    # arms that have a record but no longer trade: shown, marked, and NOT ranked as
+    # though they were still in the running (#54)
+    for arm in retired(conn):
+        e = _entry(conn, arm["name"], arm["kind"], arm["mode"], prices,
+                   db.get_setting(conn, f"arm_since_{arm['name']}"),
+                   spec=arm["spec"], provider=arm.get("provider"),
+                   model=_label(arm["provider"], arm["model"]) if arm["kind"] == "llm" else None)
+        e["retired"] = arm["retired_because"]
+        rows.append(e)
     bench = ledger.bench_value(conn, primary_mode, prices)
     if bench:
         rows.append({"key": "hodl", "kind": "bench", "mode": None,
