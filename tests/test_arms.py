@@ -502,3 +502,30 @@ def test_a_recovered_arm_is_alive_again():
         assert not arms.health(conn, "shadow:claude")["dead"]
     finally:
         conn.close(); os.unlink(p)
+
+
+def test_a_broken_health_announcement_never_stops_the_other_arms(monkeypatch):
+    """run_all's contract is that a failing arm is logged and stepped over. That has
+    to hold for the health announcement too — a locked DB or a sick notifier must not
+    abort every arm queued behind it."""
+    stub_market(monkeypatch)
+    monkeypatch.setattr(config, "SHADOW_ARMS",
+                        "claude:llm:openrouter,ema:rule:ema20", raising=False)
+    monkeypatch.setattr(config, "LLM_PROVIDER", "gemini", raising=False)
+    monkeypatch.setattr(arms.advisor, "ask", lambda *a, **k:
+                        '{"action":"hold","pair":null,"fraction":null,'
+                        '"confidence":0.5,"reasoning":"rival holds"}')
+
+    def poisoned(*a, **k):
+        raise RuntimeError("database is locked")
+
+    monkeypatch.setattr(arms, "_announce_death", poisoned)
+    conn, p = make_db()
+    try:
+        data = [row("BTC/EUR", 100_000, 90_000), row("ETH/EUR", 3_000, 4_000)]
+        res = arms.run_all(conn, "paper", ["swing"], PRICES, data)
+        by = {r["arm"]: r["status"] for r in res}
+        # ema comes AFTER claude in the arm list: it must still have traded
+        assert by["ema"] == "executed"
+    finally:
+        conn.close(); os.unlink(p)

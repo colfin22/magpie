@@ -368,7 +368,14 @@ def run_all(conn, primary_mode: str, due_now: list[str], prices: dict,
         except Exception as e:  # noqa: BLE001 - shadows never touch the real bot
             LOGGER.warning("shadow arm %s failed this cycle: %s", arm["mode"], e)
             results.append({"arm": arm["name"], "status": "error", "detail": str(e)})
-        _announce_death(conn, arm)
+        # deliberately OUTSIDE the try above — an arm that just failed is precisely the
+        # one worth announcing — but it needs a guard of its OWN, or a wobble in the
+        # health check (a locked DB, a notifier) would abort every arm still to run.
+        # "A failure is logged and stepped over" has to hold for this line too.
+        try:
+            _announce_death(conn, arm)
+        except Exception as e:  # noqa: BLE001 - a status notice is never worth a cycle
+            LOGGER.warning("arm %s health announcement failed: %s", arm["mode"], e)
     return results
 
 
