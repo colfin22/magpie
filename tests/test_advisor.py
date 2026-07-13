@@ -256,3 +256,17 @@ def test_a_failing_credit_check_is_cached_so_a_dead_upstream_is_not_hammered(mon
         assert advisor.openrouter_credits(http=Boom()) is None
     assert len(calls) == 1, f"a dead upstream was called {len(calls)} times, not backed off"
     advisor._CREDITS.update(at=0.0, val=None, fetched=False)   # don't poison other tests
+
+
+def test_the_default_models_are_not_a_retired_model(monkeypatch):
+    """gemini-2.5-pro is RETIRED — it 404s with "no longer available to new users", and
+    billing does not fix it. Shipping it as the DEEP default meant a fresh install failed
+    every quarter and vault decision and safe-HELD forever: a bot that looks thoughtful
+    and is dead on half its sleeves (#58)."""
+    monkeypatch.setattr(config, "LLM_PROVIDER", "gemini", raising=False)
+    monkeypatch.setattr(config, "LLM_MODEL", "", raising=False)
+    monkeypatch.setattr(config, "LLM_MODEL_DEEP", "", raising=False)
+    fast, deep = advisor.effective_model(), advisor.effective_model(deep=True)
+    assert "gemini-2.5-pro" not in (fast, deep)
+    assert fast == "gemini-2.5-flash"
+    assert deep == "gemini-2.5-flash"   # out of the box: works, free tier, no 404

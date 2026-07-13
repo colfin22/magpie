@@ -14,7 +14,13 @@ LLM_MODEL_DEEP = os.environ.get("LLM_MODEL_DEEP", "")  # blank = provider defaul
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
 # the slow sleeves (quarter, vault) and the monthly self-review think harder
-GEMINI_MODEL_DEEP = os.environ.get("GEMINI_MODEL_DEEP", "gemini-2.5-pro")
+# Defaults to the FAST model on purpose. The old default was `gemini-2.5-pro`, which is
+# RETIRED — it 404s with "no longer available to new users", and billing does not fix it.
+# A fresh install therefore failed every quarter and vault decision and safe-HELD forever:
+# a bot that looks thoughtful and is dead on half its sleeves (#58). Flash exists, is on
+# the free tier, and works out of the box. Point this at a stronger model if you want one —
+# and prefer a tracking alias (`gemini-pro-latest`) over a pinned id, which will be retired.
+GEMINI_MODEL_DEEP = os.environ.get("GEMINI_MODEL_DEEP", "gemini-2.5-flash")
 
 # alternative brains — one key each; the active one is chosen by LLM_PROVIDER
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")          # ChatGPT (platform.openai.com)
