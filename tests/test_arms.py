@@ -2,7 +2,7 @@ import os
 import random
 import tempfile
 
-from app import arms, config, db, market, portfolio, sleeves
+from app import advisor, arms, config, db, market, portfolio, sleeves
 
 PRICES = {"BTC/EUR": 100_000.0, "ETH/EUR": 3_000.0}
 
@@ -331,3 +331,69 @@ def test_dca_holds_rather_than_erroring_once_its_slice_is_below_the_minimum(monk
     assert fat["action"] == "buy"                                   # 20% of 100 = €20, fine
     thin = arms.decide_dca({"holdings": {"EUR": 40.0}}, [], "swing", random.Random(1))
     assert thin is None                                             # 20% of 40 = €8, under the min
+
+
+# ---------- the brain is never its own control (#46) ----------
+
+ALL_LLMS = ("ema:rule:ema20,"
+            "gemini:llm:gemini,"
+            "claude:llm:openrouter@anthropic/claude-sonnet-5,"
+            "deepseek:llm:openrouter@deepseek/deepseek-chat")
+
+
+def _names(monkeypatch, provider, model=""):
+    """The arms that actually run, given who the brain is."""
+    monkeypatch.setattr(config, "SHADOW_ARMS", ALL_LLMS, raising=False)
+    monkeypatch.setattr(config, "LLM_PROVIDER", provider, raising=False)
+    monkeypatch.setattr(config, "LLM_MODEL", model, raising=False)
+    return [a["name"] for a in arms.enabled()]
+
+
+def test_gemini_brain_does_not_also_run_as_an_arm(monkeypatch):
+    # today's live config: gemini is the brain, so it must not be its own rival
+    assert _names(monkeypatch, "gemini") == ["ema", "claude", "deepseek"]
+
+
+def test_displaced_gemini_becomes_an_arm(monkeypatch):
+    # switch the brain to another provider and gemini keeps being measured —
+    # the model with the longest record must not vanish from the comparison
+    names = _names(monkeypatch, "openrouter")
+    assert "gemini" in names
+
+
+def test_a_different_model_of_the_same_provider_is_still_a_rival(monkeypatch):
+    # the brain is gemini-2.5-flash; an arm on gemini-pro is a GENUINE rival,
+    # so matching on provider alone would wrongly silence it
+    monkeypatch.setattr(config, "SHADOW_ARMS", "rival:llm:gemini@gemini-pro", raising=False)
+    monkeypatch.setattr(config, "LLM_PROVIDER", "gemini", raising=False)
+    monkeypatch.setattr(config, "LLM_MODEL", "gemini-2.5-flash", raising=False)
+    assert [a["name"] for a in arms.enabled()] == ["rival"]
+
+    # ...but the SAME model, named explicitly, is the brain and must be dropped
+    monkeypatch.setattr(config, "SHADOW_ARMS", "twin:llm:gemini@gemini-2.5-flash", raising=False)
+    assert arms.enabled() == []
+
+
+def test_rule_arms_are_never_confused_for_the_brain(monkeypatch):
+    monkeypatch.setattr(config, "SHADOW_ARMS", "ema:rule:ema20,dca:rule:dca", raising=False)
+    monkeypatch.setattr(config, "LLM_PROVIDER", "gemini", raising=False)
+    assert [a["name"] for a in arms.enabled()] == ["ema", "dca"]
+
+
+def test_same_model_through_a_different_gateway_is_still_the_brain(monkeypatch):
+    # brain = Claude direct; arm = the SAME Claude, routed via openrouter.
+    # Same weights, same prompt — one contestant, and it must not judge itself.
+    monkeypatch.setattr(config, "SHADOW_ARMS",
+                        "claude:llm:openrouter@anthropic/claude-sonnet-5", raising=False)
+    monkeypatch.setattr(config, "LLM_PROVIDER", "anthropic", raising=False)
+    monkeypatch.setattr(config, "LLM_MODEL", "", raising=False)
+    assert arms.enabled() == []
+
+
+def test_brain_model_override_does_not_leak_into_an_arm(monkeypatch):
+    # LLM_MODEL is the BRAIN's override. If it leaked, this gemini arm would be
+    # called with claude's model id — the arm silently running the wrong model.
+    monkeypatch.setattr(config, "LLM_PROVIDER", "anthropic", raising=False)
+    monkeypatch.setattr(config, "LLM_MODEL", "claude-sonnet-5", raising=False)
+    assert advisor.effective_model("gemini") == config.GEMINI_MODEL
+    assert advisor.effective_model() == "claude-sonnet-5"

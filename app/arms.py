@@ -160,8 +160,38 @@ def parse(spec: str) -> list[dict]:
     return out
 
 
+def is_the_brain(arm: dict) -> bool:
+    """True if this llm arm IS the live brain — same provider, same effective model.
+
+    SHADOW_ARMS and LLM_PROVIDER are configured independently, so nothing stops
+    them naming the same model. If that goes unchecked the brain becomes one of
+    its own rivals: the identical model, on the identical prompt, listed twice on
+    the leaderboard as though it were two contestants. Whatever that table then
+    says about skill is worthless — and it looks authoritative, which is worse.
+
+    Matched on the MODEL, not the provider. Two things follow, and both matter:
+
+    - an arm running a deliberately different model of the same provider
+      (gemini-pro against a gemini-2.5-flash brain) is a genuine rival, and runs.
+    - an arm reaching the brain's model through a different gateway
+      (openrouter@anthropic/claude-sonnet-5 against a direct anthropic
+      claude-sonnet-5 brain) is the same weights on the same prompt — one
+      contestant wearing two shirts. It is dropped.
+    """
+    if arm["kind"] != "llm":
+        return False
+    mine = advisor.effective_model(arm["provider"], override=arm["model"])
+    return advisor.model_id(mine) == advisor.model_id(advisor.effective_model())
+
+
 def enabled() -> list[dict]:
-    return parse(config.SHADOW_ARMS)
+    """The configured arms, minus whichever one is currently the brain (#46).
+
+    So SHADOW_ARMS can list every LLM in the running — gemini included — and the
+    displaced model keeps being measured the moment it stops being the brain,
+    which is exactly when you most want to know if its replacement is better.
+    """
+    return [a for a in parse(config.SHADOW_ARMS) if not is_the_brain(a)]
 
 
 def ensure_seeded(conn, arm: dict, primary_mode: str) -> bool:
@@ -322,7 +352,8 @@ def _curve(conn, mode: str, limit: int = 400) -> list[dict]:
     return [dict(r) for r in reversed(rows)]
 
 
-def _entry(conn, key: str, kind: str, mode: str, prices: dict, since: str | None) -> dict:
+def _entry(conn, key: str, kind: str, mode: str, prices: dict, since: str | None,
+           model: str | None = None) -> dict:
     if not since:   # the real bot has no seed date — its record starts at its first snapshot
         row = conn.execute("SELECT MIN(at) a FROM snapshots WHERE mode=?", (mode,)).fetchone()
         since = row["a"] if row else None
@@ -338,6 +369,7 @@ def _entry(conn, key: str, kind: str, mode: str, prices: dict, since: str | None
             "pnl_pct": round((equity - invested) / invested * 100, 1) if invested else None,
             "trades": trades,
             "win_rate_pct": stats["win_rate_pct"] if stats else None,
+            "model": model,   # which model actually decided this row's trades (#45)
             "since": since, "curve": _curve(conn, mode)}
 
 
@@ -348,12 +380,15 @@ def standings(conn, primary_mode: str, prices: dict[str, float]) -> list[dict]:
     non-comparable record, and the table must never let that pass for skill.
     """
     rows = [_entry(conn, "magpie", "bot", primary_mode, prices,
-                   db.get_setting(conn, "bot_since"))]
+                   db.get_setting(conn, "bot_since"),
+                   model=advisor.effective_model())]
     for arm in enabled():
         if not conn.execute("SELECT 1 FROM sleeve_meta WHERE mode=?", (arm["mode"],)).fetchone():
             continue   # configured but not seeded yet — it starts at the next cycle
         rows.append(_entry(conn, arm["name"], arm["spec"], arm["mode"], prices,
-                           db.get_setting(conn, f"arm_since_{arm['name']}")))
+                           db.get_setting(conn, f"arm_since_{arm['name']}"),
+                           model=advisor.effective_model(arm["provider"], override=arm["model"])
+                           if arm["kind"] == "llm" else None))
     bench = ledger.bench_value(conn, primary_mode, prices)
     if bench:
         rows.append({"key": "hodl", "kind": "bench", "mode": None,

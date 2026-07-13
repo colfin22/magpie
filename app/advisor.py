@@ -131,10 +131,42 @@ def _default_models(provider: str) -> tuple[str, str]:
     return config.GEMINI_MODEL, config.GEMINI_MODEL_DEEP
 
 
-def _resolve_model(provider: str, deep: bool, override: str | None) -> str:
+def effective_model(provider: str | None = None, deep: bool = False,
+                    override: str | None = None) -> str:
+    """The model that will ACTUALLY decide — exactly what ask() would resolve.
+
+    Deliberately routed through the same `_resolve_model` the call path uses, so
+    a label built from this can never drift from the model really being asked
+    (a leaderboard that names the wrong model is worse than one that names none).
+
+    provider=None means the live brain. Naming a provider means a shadow arm, and
+    an arm does NOT inherit the brain's LLM_MODEL override.
+    """
+    return _resolve_model(provider or active_provider(), deep, override,
+                          brain=provider is None)
+
+
+def model_id(model: str) -> str:
+    """The bare model, stripped of whatever gateway routed to it.
+
+    `anthropic/claude-sonnet-5` (via openrouter) and `claude-sonnet-5` (direct)
+    are the same weights answering the same prompt — for the bake-off they are
+    one contestant, however they were reached.
+    """
+    return (model or "").rsplit("/", 1)[-1].strip().lower()
+
+
+def _resolve_model(provider: str, deep: bool, override: str | None,
+                   brain: bool = True) -> str:
     if override:
         return override
     reg, deep_m = _default_models(provider)
+    if not brain:
+        # LLM_MODEL/LLM_MODEL_DEEP override the BRAIN's model. Letting them leak
+        # into a shadow arm would call that arm's provider with a model id from a
+        # different one — every arm silently running the wrong model, and a
+        # bake-off whose results mean nothing.
+        return deep_m if deep else reg
     if deep:
         return config.LLM_MODEL_DEEP or deep_m
     return config.LLM_MODEL or reg
@@ -250,6 +282,8 @@ def ask(prompt: str, http: httpx.Client | None = None,
     Transient upstream failures (503 overload, 429, timeouts) are retried with
     exponential backoff; only a sustained outage surfaces as an AdvisorError
     (which the engine turns into a safe HOLD)."""
+    # a caller naming a provider is a shadow arm; only the live brain leaves it None
+    is_brain = provider is None
     if provider is None and deep and config.DEEP_PROVIDER:
         # rare, expensive calls may live on a different provider than the cheap ones
         provider, model = config.DEEP_PROVIDER, model or config.DEEP_MODEL or None
@@ -259,7 +293,7 @@ def ask(prompt: str, http: httpx.Client | None = None,
     key = key_for(provider)
     if not key:
         raise AdvisorError(f"no API key configured for provider {provider!r}")
-    chosen = _resolve_model(provider, deep, model)
+    chosen = _resolve_model(provider, deep, model, brain=is_brain)
     own = http is None
     http = http or httpx.Client(timeout=120)
     try:

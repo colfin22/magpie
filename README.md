@@ -97,7 +97,16 @@ settings page — dropdown, key, **Test active brain**, save; no restart.
 
 > A paid ChatGPT / Perplexity / Copilot **subscription is not an API key** —
 > each needs a developer key from the provider's platform, billed per token.
-> Gemini's free tier is enough to run Magpie outright.
+
+> ⚠️ **Gemini's free tier works, but don't depend on it.** It is heavily
+> rate-limited and heavily used, and it will hand you `429 Too Many Requests`
+> at busy times — sometimes for a run of retries in a row. Magpie fails safe
+> (a refused call is a HOLD, never a bad trade) and the retry timer usually
+> gets the decision through minutes later, so nothing breaks. But a sleeve can
+> silently sit out a slot it meant to act on, and you'll see `FAILED — out of
+> quota` in the diary. It's fine for trying Magpie out. **If you want the brain
+> to answer when it's asked, enable billing on the Gemini project or point
+> `LLM_PROVIDER` at a paid one.**
 
 ## The books
 
@@ -149,8 +158,9 @@ holds the halt button. Add your own guardrails if that's not your temperament.
 **You need:** Docker, a **dedicated [Kraken](https://kraken.com) account that
 holds only the money you want Magpie to manage**, a trade-only API key (see
 above), and an API key for one supported LLM — **Gemini** is the default and its
-[free tier](https://aistudio.google.com/apikey) is plenty to start (the bot makes
-only a handful of calls a day). See [The brain](#the-brain--pick-your-llm) for the
+[free tier](https://aistudio.google.com/apikey) is enough to get started (the bot
+makes only a handful of calls a day) — though it is rate-limited enough that it
+will refuse some of them, so don't lean on it. See [The brain](#the-brain--pick-your-llm) for the
 alternatives.
 
 > **⚠️ Use an empty Kraken account.** On its first live cycle Magpie treats the
@@ -321,6 +331,30 @@ The spec is `provider@model` (model optional — the provider's default is used)
 bake-off needs one account rather than five. Each llm arm costs roughly one API call per due sleeve
 per cycle — pennies a day, but not nothing. A rival brain that errors, or babbles, holds *its own*
 arm and nobody else's.
+
+### The brain is never its own control
+
+**List every LLM in the running, the brain included.** Magpie drops whichever arm *is* the current
+brain, so a model is never both the contestant and its own rival:
+
+```
+SHADOW_ARMS=ema:rule:ema20,dca:rule:dca,coinflip:rule:random,gemini:llm:gemini,claude:llm:openrouter@anthropic/claude-sonnet-5,deepseek:llm:openrouter@deepseek/deepseek-chat
+```
+
+| `LLM_PROVIDER` | arms that actually run |
+|---|---|
+| `gemini` | ema, dca, coinflip, claude, deepseek |
+| `anthropic` | ema, dca, coinflip, **gemini**, deepseek |
+| `deepseek` | ema, dca, coinflip, **gemini**, claude |
+
+Change the brain and the model it displaces *keeps being measured* — which is exactly when you most
+want to know whether its replacement is actually any better. The match is on the **model**, not the
+provider: an arm on `gemini-pro` against a `gemini-2.5-flash` brain is a genuine rival and still
+runs, while an arm reaching the brain's own model through another gateway
+(`openrouter@anthropic/claude-sonnet-5` against a direct `anthropic` brain) is the same weights on
+the same prompt, and is dropped.
+
+The leaderboard names the model behind every row, so you can always see who is actually deciding.
 
 Rule arms need no API key and cost nothing to run. An arm is simply another value in the
 `mode` column, so it gets its own books, its own decision diary and its own equity history,

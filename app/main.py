@@ -913,6 +913,9 @@ async function load(){
     document.getElementById('board-note').textContent =
       board.some(r => r.key === 'coinflip' || r.kind === 'random') ? 'beat the coin flip' : '';
     const BARS = {hodl: 'doing nothing', random: 'chance'};
+    // every row names the model (or rule) that actually made its trades (#45) —
+    // the brain's model is the whole variable under test, so the table must say it
+    const RULES = {ema20: 'dumb momentum', dca: 'never sells', random: 'chance'};
     document.getElementById('board').innerHTML =
       '<thead><tr><th>Strategy</th><th class="tp">Equity</th><th class="tp">P/L</th>' +
       '<th class="tp">Trades</th><th class="tp">Wins</th><th class="tp">Since</th></tr></thead>' +
@@ -920,11 +923,12 @@ async function load(){
       board.map(r => {
         const me = r.key === 'magpie';
         const bar = BARS[r.key] || BARS[r.kind];
+        const desc = r.model || RULES[r.kind] || bar;
         const pl = r.pnl_eur;
         return `<tr class="${me ? 'me' : (bar ? 'bar' : '')}">` +
           `<td><span class="dot" style="background:${COLOURS[r.key] || '#8b93a7'}"></span>` +
           `${me ? '<b>magpie (the brain)</b>' : r.key}` +
-          `${bar ? ` <span class="tag">— ${bar}</span>` : ''}</td>` +
+          `${desc ? ` <span class="tag">— ${desc}</span>` : ''}</td>` +
           `<td class="tp">${me ? '<b>' : ''}${CCY}${r.equity_eur.toFixed(2)}${me ? '</b>' : ''}</td>` +
           `<td class="tp ${pl >= 0 ? 'up' : 'down'}">${pl >= 0 ? '+' : '−'}${CCY}${Math.abs(pl).toFixed(2)}` +
           `${r.pnl_pct === null ? '' : ` (${r.pnl_pct}%)`}</td>` +
