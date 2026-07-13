@@ -9,6 +9,14 @@ a small stake on Kraken and an API key for the LLM of your choice; it manages th
 money on its own schedule, keeps a full written diary of every thought, and pushes
 you a daily digest. Your only control is the halt button — by design.
 
+**And it puts the LLMs against each other.** Gemini, Claude, GPT, Grok and DeepSeek
+can each run as a [shadow arm](#shadow-arms--the-experiment-has-controls): the same
+prompt, the same market, the same instant, the same fees — trading in simulation
+beside the real bot, and beside dumb-momentum, never-sell and coin-flip rule arms.
+The leaderboard names the model behind every row, so you can see which brain is
+actually any good — and whether *any* of them beat a coin flip. That's the
+experiment. One bot proves nothing; a bot with controls might.
+
 > **⚠️ This is an experiment, not a product.** An LLM has no proven trading edge.
 > Magpie is built for people who want to *watch an AI manage a toy stake* with
 > real rails around it — not for money you can't afford to lose. Expect anything
@@ -249,7 +257,7 @@ common free-tier limit. Empty = use `LLM_PROVIDER`, as before.
 > in the UI does nothing — change it in the UI (or clear the row).
 
 The features below are all **off unless you turn them on**:
-`SHADOW_ARMS` (rival strategies traded in simulation — [shadow arms](#shadow-arms-optional)),
+`SHADOW_ARMS` (rival strategies traded in simulation — [shadow arms](#shadow-arms--the-experiment-has-controls)),
 `STOP_LOSS_ENABLED` ([stop-losses](#stop-losses-optional)),
 `CONTEXT_FUNDING` / `CONTEXT_DEPTH` / `NEWS_RSS_URL` ([what the brain sees](#what-the-brain-sees-context)),
 and `DYNAMIC_UNIVERSE` / `DYNAMIC_TOP_N` / `DYNAMIC_SELL_FLOOR_N`
@@ -298,7 +306,7 @@ against Kraken before it's saved, is always tradeable regardless of the rankings
 and — because you chose it deliberately — is **exempt from the sell floor**.
 
 
-## Shadow arms (optional)
+## Shadow arms — the experiment has controls
 
 One bot cannot tell you whether it is any good. If it ends the year up 6%, was that
 skill, luck, or simply a rising market? **Shadow arms** are rival strategies that trade
@@ -355,6 +363,12 @@ runs, while an arm reaching the brain's own model through another gateway
 the same prompt, and is dropped.
 
 The leaderboard names the model behind every row, so you can always see who is actually deciding.
+
+**An arm whose key you don't have simply doesn't run.** Copy the line above wholesale, set only the
+keys you actually own, and the rest are dropped before they start — no errors, and no phantom row on
+the leaderboard. That last part matters: a seeded but keyless arm would sit there with a flat curve
+and 0 trades, which reads as a strategy that *chose* to hold. It chose nothing — it was never able
+to answer. A row in that table is a claim about skill, and an arm that cannot speak has made none.
 
 Rule arms need no API key and cost nothing to run. An arm is simply another value in the
 `mode` column, so it gets its own books, its own decision diary and its own equity history,

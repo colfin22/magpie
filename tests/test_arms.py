@@ -2,9 +2,20 @@ import os
 import random
 import tempfile
 
+import pytest
+
 from app import advisor, arms, config, db, market, portfolio, sleeves
 
 PRICES = {"BTC/EUR": 100_000.0, "ETH/EUR": 3_000.0}
+
+
+@pytest.fixture(autouse=True)
+def arm_keys(monkeypatch):
+    """An llm arm with no key is now dropped before it ever runs (#47), so the
+    arms under test need keys — as they would have in any real deployment. A
+    test that is specifically about a MISSING key clears its own."""
+    monkeypatch.setattr(config, "OPENROUTER_API_KEY", "test-openrouter-key", raising=False)
+    monkeypatch.setattr(config, "GEMINI_API_KEY", "test-gemini-key", raising=False)
 
 
 def make_db():
@@ -397,3 +408,37 @@ def test_brain_model_override_does_not_leak_into_an_arm(monkeypatch):
     monkeypatch.setattr(config, "LLM_MODEL", "claude-sonnet-5", raising=False)
     assert advisor.effective_model("gemini") == config.GEMINI_MODEL
     assert advisor.effective_model() == "claude-sonnet-5"
+
+
+# ---------- an arm with no key never runs (#47) ----------
+
+def test_llm_arm_without_a_key_is_dropped(monkeypatch):
+    monkeypatch.setattr(config, "SHADOW_ARMS",
+                        "ema:rule:ema20,ghost:llm:grok", raising=False)
+    monkeypatch.setattr(config, "LLM_PROVIDER", "gemini", raising=False)
+    monkeypatch.setattr(config, "GROK_API_KEY", "", raising=False)
+    # the rule arm needs no key and survives; the keyless llm arm never runs at all
+    assert [a["name"] for a in arms.enabled()] == ["ema"]
+
+
+def test_llm_arm_runs_once_its_key_is_set(monkeypatch):
+    monkeypatch.setattr(config, "SHADOW_ARMS", "ghost:llm:grok", raising=False)
+    monkeypatch.setattr(config, "LLM_PROVIDER", "gemini", raising=False)
+    monkeypatch.setattr(config, "GROK_API_KEY", "xai-key", raising=False)
+    assert [a["name"] for a in arms.enabled()] == ["ghost"]
+
+
+def test_keyless_arm_is_never_seeded_so_it_cannot_haunt_the_leaderboard(monkeypatch):
+    """The real damage: a seeded, keyless arm shows a flat curve and 0 trades,
+    which reads as a strategy that chose to hold. It never answered at all."""
+    stub_market(monkeypatch)
+    monkeypatch.setattr(config, "SHADOW_ARMS", "ghost:llm:grok", raising=False)
+    monkeypatch.setattr(config, "LLM_PROVIDER", "gemini", raising=False)
+    monkeypatch.setattr(config, "GROK_API_KEY", "", raising=False)
+    conn, p = make_db()
+    try:
+        assert arms.run_all(conn, "paper", ["swing"], PRICES, []) == []
+        modes = {r[0] for r in conn.execute("SELECT DISTINCT mode FROM holdings")}
+        assert "shadow:ghost" not in modes   # no books ever came into existence
+    finally:
+        conn.close(); os.unlink(p)

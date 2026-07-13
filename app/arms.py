@@ -184,14 +184,31 @@ def is_the_brain(arm: dict) -> bool:
     return advisor.model_id(mine) == advisor.model_id(advisor.effective_model())
 
 
+def is_unconfigured(arm: dict) -> bool:
+    """True if this llm arm has no API key and so could never answer anything (#47).
+
+    Without this it would still be seeded and still asked every cycle, failing
+    every time — and it would sit on the leaderboard with a flat curve and 0
+    trades, which reads as a strategy that CHOSE to hold. It chose nothing; it
+    was never able to reply. A row in that table is a claim about skill, and an
+    arm that cannot speak has made no claim.
+    """
+    return arm["kind"] == "llm" and not advisor.key_for(arm["provider"])
+
+
 def enabled() -> list[dict]:
-    """The configured arms, minus whichever one is currently the brain (#46).
+    """The configured arms, minus the brain (#46) and minus any with no key (#47).
 
     So SHADOW_ARMS can list every LLM in the running — gemini included — and the
     displaced model keeps being measured the moment it stops being the brain,
     which is exactly when you most want to know if its replacement is better.
+    Arms whose key you don't have simply don't run.
+
+    Hot path: called on every /api/state, so it never logs. run_all() says once
+    per cycle which arms were skipped and why.
     """
-    return [a for a in parse(config.SHADOW_ARMS) if not is_the_brain(a)]
+    return [a for a in parse(config.SHADOW_ARMS)
+            if not is_the_brain(a) and not is_unconfigured(a)]
 
 
 def ensure_seeded(conn, arm: dict, primary_mode: str) -> bool:
@@ -328,6 +345,14 @@ def run_all(conn, primary_mode: str, due_now: list[str], prices: dict,
     cycle-failure alerting — a broken shadow is not a 3am problem.
     """
     rng = rng or random.Random()
+    # a silently missing arm is its own trap — say once per cycle what didn't run
+    for arm in parse(config.SHADOW_ARMS):
+        if is_the_brain(arm):
+            LOGGER.info("arm %r skipped: it IS the live brain (%s) — a model may not "
+                        "be its own control", arm["name"], advisor.effective_model())
+        elif is_unconfigured(arm):
+            LOGGER.info("arm %r skipped: no API key for provider %r",
+                        arm["name"], arm["provider"])
     results = []
     for arm in enabled():
         try:
