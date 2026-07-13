@@ -161,6 +161,43 @@ There is deliberately **no position cap and no circuit breaker** — no rule tha
 halts the strategy after a bad run. The operator takes the risk knowingly and
 holds the halt button. Add your own guardrails if that's not your temperament.
 
+## Silence is not judgement
+
+The single most dangerous failure in a bot like this is not a bad trade. It is a
+bot that **cannot act, rendered as a bot that chose not to**.
+
+Every "do nothing" outcome here looks the same from the outside — a flat line, a
+HOLD, an empty row — and *doing nothing* is a perfectly respectable decision. That
+is exactly what makes it such good camouflage. Every one of these has actually
+happened in this repo:
+
+| What was really going on | What it looked like |
+|---|---|
+| The deep model was retired; quarter and vault 404'd on every call | Two sleeves calmly holding |
+| Half the portfolio was cash nobody had drawn the model's attention to | A brain patiently staying in cash |
+| A shadow arm had no API key and was never asked anything | A strategy with the conviction to hold |
+| An arm's provider ran out of credit and died | Two flat, disciplined equity curves |
+| An arm was dropped from the config; its record was deleted from the table | An arm that never existed |
+
+Not one of those announces itself. Each renders as *restraint* — the most
+plausible-looking output an unthinking system can produce — and a bot whose whole
+claim is *"an LLM is managing this money"* silently stops being true.
+
+So the rule, everywhere in this codebase:
+
+> **If the bot could not act, it must say so — loudly, and in the place you are
+> already looking. It may never fall back on a silence that reads as a decision.**
+
+In practice: a sleeve that never got an answer is a **⛔ FAILED** row in the diary,
+not a HOLD. A dead arm is marked **⚠ not answering** on the leaderboard, not left
+flat. A retired arm keeps its row and states *why* it stopped. Idle cash is named
+in the prompt, so holding it has to be **argued for** rather than defaulted into.
+An arm that cannot speak is dropped before it can pose as one that did.
+
+A HOLD in this bot should always mean *"I thought about it and chose to wait."*
+If it can ever mean *"nobody was home"*, the diary is fiction and the leaderboard
+is measuring nothing.
+
 ## Run
 
 **You need:** Docker, a **dedicated [Kraken](https://kraken.com) account that
