@@ -70,12 +70,12 @@ def _discord(title, message):
 def _telegram(title, message):
     if not (config.TELEGRAM_BOT_TOKEN and config.TELEGRAM_CHAT_ID):
         return None
-    text = f"*{title}*\n{message}"
+    text = f"<b>{title}</b>\n{message}"
     if _click():
         text += f"\n{_click()}"
     r = httpx.post(f"https://api.telegram.org/bot{config.TELEGRAM_BOT_TOKEN}/sendMessage",
                    json={"chat_id": config.TELEGRAM_CHAT_ID, "text": text,
-                         "parse_mode": "Markdown", "disable_web_page_preview": True}, timeout=_T)
+                         "parse_mode": "HTML", "disable_web_page_preview": True}, timeout=_T)
     r.raise_for_status()
     return True
 
