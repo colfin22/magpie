@@ -123,10 +123,13 @@ def _track_cycle_outcome(conn, results: list[dict], crashed: bool) -> None:
     executed decisions both count as the bot working."""
     failed = crashed or (results != [] and all(
         r.get("status") in ("error", "no_key", "invalid") for r in results))
-    n = int(db.get_setting(conn, "consecutive_failures", "0") or 0)
-    n = n + 1 if failed else 0
-    db.set_setting(conn, "consecutive_failures", str(n))
-    if n == config.ERROR_ALERT_AFTER:
+    # incremented IN SQL, not read-modify-written across a connection (#79)
+    n = db.bump_setting(conn, "consecutive_failures", 1) if failed \
+        else db.bump_setting(conn, "consecutive_failures", reset=True)
+    # >= not ==, and re-alert every ERROR_ALERT_AFTER cycles thereafter (#75). Firing on
+    # exactly one cycle meant that if THAT push was dropped, cycles 4, 5, 20 re-alerted
+    # nothing — the alert designed to catch a silent failure could itself fail silently.
+    if n >= config.ERROR_ALERT_AFTER and n % config.ERROR_ALERT_AFTER == 0:
         ha.notify("Magpie is failing silently",
                   f"{n} decision cycles in a row have failed — check the diary "
                   f"and logs. Trading is NOT halted; the bot just isn't managing.")
@@ -335,16 +338,19 @@ def retry_now(force: bool = False) -> dict:
             db.set_setting(conn, "retry_attempts", "0")
             db.set_setting(conn, "retry_cycle_at", "")
             return {"status": "nothing-to-retry"}
-        attempts = int(db.get_setting(conn, "retry_attempts") or 0)
-        if attempts >= CYCLE_RETRY_MAX and not force:
+        # CLAIM the attempt before the slow work, atomically (#79). This used to read the
+        # counter, do minutes of LLM calls and fills, then write back read+1 — so two
+        # overlapping retries read the same number and the cap became unenforceable during
+        # exactly the sustained outage it exists to bound.
+        attempts = db.bump_setting(conn, "retry_attempts", 1)
+        if attempts > CYCLE_RETRY_MAX and not force:
             db.set_setting(conn, "retry_cycle_at", "")  # wait for the next scheduled cycle
-            return {"status": "exhausted", "attempts": attempts}
+            return {"status": "exhausted", "attempts": attempts - 1}
         results = retry_sleeves(conn, mode, failed)
         db.set_setting(conn, "last_cycle_at", _now())
         _track_cycle_outcome(conn, results, crashed=False)
-        db.set_setting(conn, "retry_attempts", str(attempts + 1))
         _note_retry_state(conn, results, fresh_cycle=False)
-        return {"status": "ok", "retried": failed, "attempt": attempts + 1,
+        return {"status": "ok", "retried": failed, "attempt": attempts,
                 "results": results}
     finally:
         conn.close()

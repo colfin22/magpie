@@ -70,7 +70,14 @@ def grade(conn, limit: int = 500) -> dict:
         end = at + timedelta(days=days)
         if end > _now():
             continue                                    # too soon to tell — leave it ungraded
-        entry = _close_at(conn, d["pair"], at)
+        # Grade from the price we ACTUALLY FILLED AT (#77). _close_at() returns the last
+        # daily close at-or-before the decision — and candles are keyed at the day's OPEN,
+        # so for a decision at 09:00 that is TODAY's candle, whose close is the completed
+        # close up to 15 hours AFTER the trade. A lookahead price the bot could never have
+        # traded at, while orders.price — the real fill — sat unused in the database. (#77)
+        fill = conn.execute("SELECT price FROM orders WHERE decision_id=? ORDER BY id LIMIT 1",
+                            (d["id"],)).fetchone()
+        entry = (fill["price"] if fill and fill["price"] else None) or _close_at(conn, d["pair"], at)
         exit_ = _close_at(conn, d["pair"], end)
         if not entry or not exit_:
             skipped += 1                                # no candle history for that pair/date

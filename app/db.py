@@ -151,3 +151,25 @@ def set_setting(conn, key: str, value: str) -> None:
     conn.execute("INSERT INTO settings(key,value) VALUES(?,?) "
                  "ON CONFLICT(key) DO UPDATE SET value=excluded.value", (key, value))
     conn.commit()
+
+
+def bump_setting(conn, key: str, delta: int = 1, reset: bool = False) -> int:
+    """Increment a counter IN THE DATABASE, and return the new value (#79).
+
+    The counters (consecutive_failures, retry_attempts) were read into Python, added to,
+    and written back — a read-modify-write across a connection boundary. Two overlapping
+    runs read the same value and one increment was simply lost, which is exactly how the
+    retry attempt cap became unenforceable during a sustained outage: the very situation
+    it exists to bound. Do the arithmetic in SQL so the write cannot be based on a stale
+    read. (The #68 mutex makes overlap rare; this makes the counter correct regardless.)
+    """
+    if reset:
+        set_setting(conn, key, "0")
+        return 0
+    cur = conn.execute(
+        "INSERT INTO settings(key,value) VALUES(?,?) "
+        "ON CONFLICT(key) DO UPDATE SET value = CAST(CAST(value AS INTEGER) + ? AS TEXT) "
+        "RETURNING value", (key, str(delta), delta))
+    row = cur.fetchone()
+    conn.commit()
+    return int(row["value"])

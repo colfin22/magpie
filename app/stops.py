@@ -109,18 +109,32 @@ def cancel_for(conn, mode: str, sleeve: str, pair: str) -> bool:
     return ok
 
 
-def _book_fill(conn, stop: dict, price: float) -> dict:
+def _book_fill(conn, stop: dict, price: float, settled: dict | None = None) -> dict:
     """A stop fired: the coins are gone from the real account, so make the books
     say so — and leave an audit row, exactly as a forced sell does. Silent
-    absorption by the nightly reconcile would erase the fact it ever happened."""
+    absorption by the nightly reconcile would erase the fact it ever happened.
+
+    `settled` is what the EXCHANGE says actually happened. Book that, not a model of
+    it (#78). This path used to compute `proceeds = amount * price` and
+    `fee = proceeds * TAKER_FEE` — the very mistake #39 fixed everywhere else. The
+    modelled fee does not match Kraken's real one, so every stop fill left a small
+    surplus of unbooked EUR at the exchange, which the top-up detector then had to
+    decide what to do with. Drift absorption must be the exception, not the accounting.
+    """
     from . import portfolio   # local import: portfolio imports this module
 
     mode, sleeve, pair = stop["mode"], stop["sleeve"], stop["pair"]
     asset = pair.split("/")[0]
     h = portfolio.holdings(conn, mode, sleeve)
-    amount = min(stop["amount"], h.get(asset, 0.0))    # never book more than the sleeve holds
-    proceeds = amount * price
-    fee = proceeds * config.TAKER_FEE                  # a triggered stop takes liquidity
+    if settled and settled.get("filled"):
+        amount = settled["filled"]                     # what the exchange really sold
+        proceeds = settled["cost"]                     # quote it really returned
+        fee = settled["fee_quote"]                     # the fee it really charged
+        price = settled.get("price") or price
+    else:                                              # paper/shadow: model it
+        amount = min(stop["amount"], h.get(asset, 0.0))
+        proceeds = amount * price
+        fee = proceeds * config.TAKER_FEE              # a triggered stop takes liquidity
     portfolio._set(conn, mode, sleeve, asset, h.get(asset, 0.0) - amount)
     portfolio._set(conn, mode, sleeve, config.BASE_CURRENCY,
                    h.get(config.BASE_CURRENCY, 0.0) + proceeds - fee)
@@ -158,7 +172,16 @@ def sync(conn, mode: str, prices: dict[str, float]) -> list[dict]:
                 status = (o.get("status") or "").lower()
                 if status == "closed" and float(o.get("filled") or 0) > 0:
                     price = float(o.get("average") or o.get("price") or stop["stop_price"])
-                    fired.append(_book_fill(conn, stop, price))
+                    # book what the exchange SETTLED, not a model of it (#78)
+                    from . import portfolio
+                    try:
+                        settled = portfolio._settle(market.exchange(), stop["pair"],
+                                                    [stop["exchange_id"]])
+                    except Exception as e:  # noqa: BLE001 - fall back to the modelled fill
+                        LOGGER.warning("could not read back stop fill %s (%s) — booking the "
+                                       "modelled fill instead", stop["exchange_id"], e)
+                        settled = None
+                    fired.append(_book_fill(conn, stop, price, settled))
                 elif status in ("canceled", "cancelled", "expired", "rejected"):
                     conn.execute("UPDATE stops SET status='cancelled', closed_at=? WHERE id=?",
                                  (_now(), stop["id"]))

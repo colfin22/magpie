@@ -915,3 +915,39 @@ def test_health_returns_503_when_unhealthy(monkeypatch):
         assert r.json()["healthy"] is True and r.status_code == 200
     finally:
         conn.close(); os.unlink(p)
+
+
+# --- #79: counters must not be read-modify-written ---------------------------
+
+def test_bump_setting_is_atomic_and_returns_the_new_value():
+    """retry_attempts was READ, then minutes of LLM calls and fills happened, then read+1
+    was written back. Two overlapping retries read the same number and one increment was
+    simply lost -- so CYCLE_RETRY_MAX stopped bounding anything during exactly the
+    sustained outage it exists for (#79)."""
+    conn, p = make_db()
+    try:
+        assert db.bump_setting(conn, "consecutive_failures", 1) == 1
+        assert db.bump_setting(conn, "consecutive_failures", 1) == 2
+        assert db.bump_setting(conn, "consecutive_failures", 1) == 3
+        assert db.get_setting(conn, "consecutive_failures") == "3"
+        assert db.bump_setting(conn, "consecutive_failures", reset=True) == 0
+        assert db.get_setting(conn, "consecutive_failures") == "0"
+    finally:
+        conn.close(); os.unlink(p)
+
+
+def test_the_failing_silently_alert_re_alerts(monkeypatch):
+    """It fired on `n == ERROR_ALERT_AFTER` exactly. If THAT push was dropped, cycles 4,
+    5, 20 re-alerted nothing -- the alert designed to catch a silent failure could itself
+    fail silently (#75)."""
+    conn, p = make_db()
+    try:
+        sent = []
+        monkeypatch.setattr(engine.ha, "notify", lambda t, m: sent.append(t))
+        monkeypatch.setattr(engine.config, "ERROR_ALERT_AFTER", 3)
+        for _ in range(6):
+            engine._track_cycle_outcome(conn, [{"sleeve": "swing", "status": "error"}],
+                                        crashed=False)
+        assert len(sent) == 2, "must re-alert, not fire exactly once"
+    finally:
+        conn.close(); os.unlink(p)
