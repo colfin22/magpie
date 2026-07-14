@@ -570,3 +570,71 @@ def test_a_garbage_answer_cannot_kill_the_other_sleeves(monkeypatch):
         assert got["fortnight"][0] == "held"
     finally:
         conn.close(); os.unlink(p)
+
+
+# --- #64: a Kraken blip must not take the cycle down --------------------------
+
+def test_tickers_retries_a_transient_timeout(monkeypatch):
+    """Kraken's public endpoints blip. One 10s read timeout on one pair used to raise
+    straight out of run_cycle and kill the whole cycle (#64)."""
+    import ccxt
+    calls = []
+
+    class Flaky:
+        def fetch_ticker(self, pair):
+            calls.append(pair)
+            if len(calls) < 3:
+                raise ccxt.RequestTimeout("kraken GET /0/public/Ticker")
+            return {"last": 100.0}
+
+    monkeypatch.setattr(market, "exchange", lambda: Flaky())
+    monkeypatch.setattr(market.time, "sleep", lambda _s: None)   # don't actually wait
+    assert market.tickers(["BTC/EUR"]) == {"BTC/EUR": 100.0}
+    assert len(calls) == 3                                        # two failures, then good
+
+
+def test_tickers_gives_up_after_the_retries(monkeypatch):
+    import ccxt
+
+    class Dead:
+        def fetch_ticker(self, pair):
+            raise ccxt.RequestTimeout("kraken down")
+
+    monkeypatch.setattr(market, "exchange", lambda: Dead())
+    monkeypatch.setattr(market.time, "sleep", lambda _s: None)
+    with pytest.raises(ccxt.RequestTimeout):
+        market.tickers(["BTC/EUR"])
+
+
+def test_a_dead_exchange_ends_the_cycle_loudly_not_silently(monkeypatch):
+    """#64 blast radius. An unreachable exchange must not CRASH run_cycle: a cycle that
+    dies before the sleeve loop writes no decision row at all, and a sleeve with no row
+    is invisible to the retry path -- the slot is lost and the diary shows a quiet day.
+    Without prices the bot genuinely cannot decide; it must SAY so, on the record."""
+    conn, p = make_db()
+    try:
+        real_connect = db.connect                      # engine.db IS db -- grab it first
+        monkeypatch.setattr(engine.db, "connect", lambda *a, **k: real_connect(p))
+        monkeypatch.setattr(engine.config, "mode", lambda: "paper")
+
+        def dead(*a, **k):
+            raise RuntimeError("kraken GET /0/public/Ticker: read timed out")
+
+        monkeypatch.setattr(engine, "_market_context", dead)
+
+        out = engine.run_cycle()                       # must NOT raise
+        assert out["status"] == "error"
+        assert "market data unavailable" in out["detail"]
+
+        check = real_connect(p)                        # run_cycle closed its own handle
+        rows = check.execute(
+            "SELECT sleeve, status, detail FROM decisions WHERE mode='paper'").fetchall()
+        assert len(rows) == 1                          # a row EXISTS -- not silence
+        assert rows[0][1] == "error"
+        assert "market data unavailable" in rows[0][2]
+
+        # and health can see it
+        assert db.get_setting(check, "consecutive_failures") == "1"
+        check.close()
+    finally:
+        conn.close(); os.unlink(p)

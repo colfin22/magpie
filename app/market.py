@@ -2,6 +2,7 @@
 needed for anything in this module, so paper mode runs without an account."""
 import logging
 import re
+import time
 from datetime import datetime, timezone
 
 import ccxt
@@ -46,10 +47,34 @@ def closes(conn, pair: str, n: int = 400, timeframe: str = "1d") -> list[float]:
     return [r["close"] for r in reversed(rows)]
 
 
+TICKER_ATTEMPTS = 3
+TICKER_BACKOFF_S = 1.0
+
+
+def _fetch_ticker(pair: str) -> dict:
+    """fetch_ticker, retried on a transient network failure.
+
+    Kraken's public endpoints blip. Unretried, a single 10s read timeout on one pair
+    used to raise straight out of run_cycle and take the WHOLE cycle down with it —
+    no decisions, no snapshot, and no row in the diary to say why (#64).
+    """
+    last = None
+    for attempt in range(TICKER_ATTEMPTS):
+        try:
+            return exchange().fetch_ticker(pair)
+        except (ccxt.RequestTimeout, ccxt.NetworkError, ccxt.ExchangeNotAvailable) as e:
+            last = e
+            if attempt + 1 < TICKER_ATTEMPTS:
+                wait = TICKER_BACKOFF_S * (2 ** attempt)
+                LOGGER.warning("ticker %s failed (%s) — retrying in %.0fs", pair, e, wait)
+                time.sleep(wait)
+    raise last
+
+
 def tickers(pairs: list[str]) -> dict[str, float]:
     out = {}
     for p in pairs:
-        out[p] = float(exchange().fetch_ticker(p)["last"])
+        out[p] = float(_fetch_ticker(p)["last"])
     return out
 
 

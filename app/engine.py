@@ -155,7 +155,17 @@ def run_cycle(now=None) -> dict:
             LOGGER.warning("top-up detection failed: %s", e)
 
         due_now = [s for s in sleeves.ALL if sleeves.due(s, now)]
-        prices, market_data, extras = _market_context(conn, "swing" in due_now)
+        try:
+            prices, market_data, extras = _market_context(conn, "swing" in due_now)
+        except Exception as e:  # noqa: BLE001 - an unreachable exchange must not CRASH the cycle
+            # Without prices the bot genuinely cannot decide anything, and that is fine.
+            # What is NOT fine is vanishing: a cycle that dies here writes no row at all,
+            # and a sleeve with no row is invisible to the retry path -- the slot is lost
+            # and the diary shows a quiet day. So fail LOUDLY and on the record (#64).
+            LOGGER.error("market data unavailable — cycle abandoned: %s", e)
+            _record(conn, mode, "", "error", f"market data unavailable: {e}")
+            _track_cycle_outcome(conn, [], crashed=True)
+            return {"status": "error", "detail": f"market data unavailable: {e}"}
 
         # Did a stop fire while we were away? Make the books honest BEFORE the brain
         # is asked anything — it must not reason about coins it no longer owns (#35).
