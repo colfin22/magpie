@@ -1,4 +1,6 @@
 import logging
+import threading
+from contextlib import contextmanager
 
 from fastapi import Body, FastAPI, Form
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
@@ -10,6 +12,35 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name
 LOGGER = logging.getLogger(__name__)
 
 app = FastAPI(title="Magpie", version=__version__)
+
+# ---------- only one book-mutating run at a time (#68) ----------
+#
+# /api/cycle, /api/cycle/retry and /api/reconcile are sync handlers, so FastAPI runs
+# them in the threadpool — two systemd timers genuinely execute in PARALLEL. Nothing
+# serialised them, and the retry path picks its candidates from the last COMMITTED
+# decision row, which is only written after the LLM call returns. So a slow retry could
+# still be deciding while the next retry timer fired, read the same stale 'error' row,
+# and re-decide the same sleeve: two real Kraken buys, one of which the books never saw.
+#
+# One worker (see Dockerfile), so a threading.Lock is honest and sufficient. We do NOT
+# queue: a run that is skipped because another is in progress is a FACT, and it gets
+# said out loud rather than silently doubling up.
+_RUN_LOCK = threading.Lock()
+
+
+@contextmanager
+def _only_one(what: str):
+    got = _RUN_LOCK.acquire(blocking=False)
+    try:
+        yield got
+    finally:
+        if got:
+            _RUN_LOCK.release()          # released even if the run raised
+
+
+def _busy(what: str) -> dict:
+    LOGGER.warning("%s skipped — another run is already in progress", what)
+    return {"status": "busy", "detail": f"{what} skipped: another run is already in progress"}
 
 # apply any web-entered settings over the env at boot (before the first cycle)
 try:
@@ -237,7 +268,10 @@ def health():
 @app.post("/api/cycle")
 def api_cycle():
     """One tick — invoked by the systemd timer (and manually)."""
-    return engine.run_cycle()
+    with _only_one("cycle") as got:
+        if not got:
+            return _busy("cycle")
+        return engine.run_cycle()
 
 
 @app.post("/api/cycle/retry")
@@ -246,7 +280,10 @@ def api_cycle_retry(force: bool = False):
 
     Called every few minutes by the magpie-retry systemd timer; `force=true`
     bypasses the consecutive-attempt cap for a manual retry."""
-    return engine.retry_now(force=force)
+    with _only_one("retry") as got:
+        if not got:
+            return _busy("retry")
+        return engine.retry_now(force=force)
 
 
 @app.post("/api/digest")
@@ -264,6 +301,13 @@ def api_review():
 def api_reconcile():
     """Nightly: absorb drift between the sleeve books and exchange reality, and
     mark any decision whose horizon has now elapsed (#33)."""
+    with _only_one("reconcile") as got:
+        if not got:
+            return _busy("reconcile")
+        return _reconcile()
+
+
+def _reconcile():
     conn = db.connect()
     try:
         prices = market.tickers(config.PAIRS)

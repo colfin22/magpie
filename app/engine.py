@@ -142,18 +142,6 @@ def run_cycle(now=None) -> dict:
             _record(conn, mode, "", "halted", "kill switch is on")
             return {"status": "halted", "stops_fired": fired}
 
-        # a fresh cash deposit on the exchange is split across the active sleeves
-        topup = None
-        try:
-            topup = portfolio.detect_topup(conn, mode)
-            if topup:
-                ha.notify("Magpie top-up detected",
-                          f"{config.symbol()}{topup['topup_eur']} new cash split three ways "
-                          f"({config.symbol()}{topup['per_sleeve']} per sleeve)")
-                arms.mirror_topup(conn, topup["topup_eur"], mode)
-        except Exception as e:  # noqa: BLE001 - a balance blip must not stop the cycle
-            LOGGER.warning("top-up detection failed: %s", e)
-
         due_now = [s for s in sleeves.ALL if sleeves.due(s, now)]
         try:
             prices, market_data, extras = _market_context(conn, "swing" in due_now)
@@ -167,13 +155,33 @@ def run_cycle(now=None) -> dict:
             _track_cycle_outcome(conn, [], crashed=True)
             return {"status": "error", "detail": f"market data unavailable: {e}"}
 
-        # Did a stop fire while we were away? Make the books honest BEFORE the brain
-        # is asked anything — it must not reason about coins it no longer owns (#35).
+        # ORDER MATTERS (#66). Claim any fired stop as a SALE *before* the top-up
+        # detector looks at the balance. detect_topup() is only "EUR at the exchange
+        # beyond what the books account for = a deposit" — so a stop that fired between
+        # cycles leaves its proceeds sitting there looking exactly like fresh capital.
+        # It would be split across the sleeves and RATCHET THE HWMs (which never come
+        # back down, so real profit silently stops being skimmed) — and then sync would
+        # book the very same sale a second time. /api/reconcile has always had this
+        # ordering; run_cycle did not.
+        #
+        # Also: the brain must not reason about coins it no longer owns (#35).
         fired = stops.sync(conn, mode, prices)
         for f in fired:
             ha.notify(f"Magpie stop-loss fired [{f['sleeve']}]",
                       f"sold {f['pair']} at {f['price']:.2f} — "
                       f"{config.symbol()}{f['proceeds_eur']} back in cash")
+
+        # a fresh cash deposit on the exchange is split across the active sleeves
+        topup = None
+        try:
+            topup = portfolio.detect_topup(conn, mode)
+            if topup:
+                ha.notify("Magpie top-up detected",
+                          f"{config.symbol()}{topup['topup_eur']} new cash split three ways "
+                          f"({config.symbol()}{topup['per_sleeve']} per sleeve)")
+                arms.mirror_topup(conn, topup["topup_eur"], mode)
+        except Exception as e:  # noqa: BLE001 - a balance blip must not stop the cycle
+            LOGGER.warning("top-up detection failed: %s", e)
 
         results = [run_sleeve(conn, mode, s, prices, market_data, extras)
                    for s in due_now]

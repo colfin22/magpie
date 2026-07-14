@@ -688,3 +688,77 @@ def test_invalid_schedules_a_retry():
         assert db.get_setting(conn, "retry_cycle_at")        # a retry IS pending
     finally:
         conn.close(); os.unlink(p)
+
+
+# --- #66: a fired stop must be booked as a SALE before top-ups are detected ----
+
+def test_stops_are_synced_before_topups_are_detected():
+    """A stop firing between cycles leaves its EUR proceeds sitting at the exchange.
+    detect_topup() is only 'EUR beyond what the books account for = a deposit', so if it
+    runs FIRST that money is split across the sleeves and RATCHETS THE HWMs (which never
+    come back down, so real profit silently stops being skimmed) -- and then stops.sync
+    books the very same sale a second time. /api/reconcile always had this ordering;
+    run_cycle did not (#66)."""
+    import inspect
+    src = inspect.getsource(engine.run_cycle)
+    sync_at = src.index("stops.sync(conn, mode, prices)")
+    topup_at = src.index("portfolio.detect_topup(conn, mode)")
+    assert sync_at < topup_at, "detect_topup must not run before stops.sync -- see #66"
+
+
+# --- #68: only one book-mutating run at a time --------------------------------
+
+def test_a_second_concurrent_run_is_refused_not_doubled(monkeypatch):
+    """/api/cycle and /api/cycle/retry are sync handlers, so two systemd timers run in
+    PARALLEL in the threadpool. The retry path picks candidates from the last COMMITTED
+    decision row -- written only after the LLM call returns -- so a slow retry could
+    still be deciding while the next one fired, read the same stale 'error', and
+    re-decide the same sleeve: TWO REAL BUYS, one of which the books never saw (#68)."""
+    import threading
+    from fastapi.testclient import TestClient
+    from app import main
+
+    started, release = threading.Event(), threading.Event()
+    calls = []
+
+    def slow_cycle(now=None):
+        calls.append("cycle")
+        started.set()
+        release.wait(timeout=5)          # hold the lock
+        return {"status": "ok"}
+
+    monkeypatch.setattr(main.engine, "run_cycle", slow_cycle)
+    monkeypatch.setattr(main.engine, "retry_now", lambda force=False: calls.append("retry"))
+
+    client = TestClient(main.app)
+    first = threading.Thread(target=lambda: client.post("/api/cycle"))
+    first.start()
+    assert started.wait(timeout=5)
+
+    # a retry firing while the cycle is mid-flight must be REFUSED, not run
+    r = client.post("/api/cycle/retry")
+    assert r.json()["status"] == "busy"
+    assert "retry" not in calls, "the retry ran concurrently with a cycle -- #68"
+
+    release.set()
+    first.join(timeout=5)
+    assert calls == ["cycle"]
+
+    # and the lock is released afterwards -- a failure must not wedge the bot forever
+    r2 = client.post("/api/cycle")
+    assert r2.json()["status"] == "ok"
+
+
+def test_the_lock_is_released_when_a_run_raises(monkeypatch):
+    from fastapi.testclient import TestClient
+    from app import main
+
+    def boom(now=None):
+        raise RuntimeError("cycle exploded")
+
+    monkeypatch.setattr(main.engine, "run_cycle", boom)
+    client = TestClient(main.app, raise_server_exceptions=False)
+    client.post("/api/cycle")                       # 500s
+
+    monkeypatch.setattr(main.engine, "run_cycle", lambda now=None: {"status": "ok"})
+    assert client.post("/api/cycle").json()["status"] == "ok"   # not wedged

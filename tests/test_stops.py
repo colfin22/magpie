@@ -293,3 +293,39 @@ def test_the_re_rested_stop_still_fires():
         assert portfolio.holdings(conn, "paper", "swing").get("BTC", 0) == 0
     finally:
         conn.close(); os.unlink(p)
+
+
+# --- #67: a failed sell must not leave the position naked ---------------------
+
+def test_a_failed_sell_re_rests_the_stop(monkeypatch):
+    """execute() cancels the sleeve's stop at Kraken AND COMMITS before the sell can
+    still fail. Nothing put it back, so any later failure -- a rejected order, a network
+    blip -- left a REAL position with no floor, silently, until that sleeve happened to
+    buy the same coin again (#67)."""
+    conn, p = make_db()
+    try:
+        monkeypatch.setattr(config, "STOP_LOSS_ENABLED", True)
+        portfolio._set(conn, "paper", "swing", "BTC", 1.0)
+        portfolio._set(conn, "paper", "swing", "EUR", 0.0)
+        conn.commit()
+        placed = stops.place(conn, "paper", "swing", "BTC/EUR", 1.0, 100.0, 10.0)
+        assert placed and len(stops.open_stops(conn, "paper", "swing", "BTC/EUR")) == 1
+
+        # make the sell blow up AFTER the stop has been cancelled
+        def boom(*a, **k):
+            raise RuntimeError("kraken rejected the order")
+
+        monkeypatch.setattr(portfolio, "_set", boom)
+        monkeypatch.setattr(portfolio.market, "touch",
+                            lambda pair: {"bid": 100.0, "ask": 100.0, "last": 100.0})
+
+        with pytest.raises(RuntimeError):
+            portfolio.execute(conn, "paper", "swing", 1, "sell", "BTC/EUR", 1.0,
+                              {"BTC/EUR": 100.0})
+
+        # the failure surfaced -- AND the floor is back under the position
+        still = stops.open_stops(conn, "paper", "swing", "BTC/EUR")
+        assert len(still) == 1, "the stop was cancelled and never re-rested -- naked position"
+        assert still[0]["stop_price"] == placed["stop_price"], "re-rested at the wrong trigger"
+    finally:
+        conn.close(); os.unlink(p)
