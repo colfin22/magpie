@@ -638,3 +638,53 @@ def test_a_dead_exchange_ends_the_cycle_loudly_not_silently(monkeypatch):
         check.close()
     finally:
         conn.close(); os.unlink(p)
+
+
+# --- #65: a malformed brain answer is as transient as a 503 -------------------
+
+def test_invalid_is_retried_like_an_error():
+    """The brain answering with a JSON array is the model fluffing ONE response — the
+    same prompt routinely answers cleanly on the next ask. It used to be excluded from
+    the retry path, so a live sleeve lost its whole decision slot while the retry timer
+    sat there with nothing to do (#65)."""
+    conn, p = make_db()
+    try:
+        engine._record(conn, "live", "swing", "invalid", "expected a JSON object, got list")
+        engine._record(conn, "live", "fortnight", "error", "gemini 503")
+        engine._record(conn, "live", "quarter", "held", "chose to hold")
+        assert sorted(engine._latest_failed_sleeves(conn, "live")) == ["fortnight", "swing"]
+    finally:
+        conn.close(); os.unlink(p)
+
+
+def test_no_key_is_still_not_retried():
+    """A missing key is a PERMANENT configuration fault, not a transient one.
+    Retrying it would just hammer a wall."""
+    conn, p = make_db()
+    try:
+        engine._record(conn, "live", "swing", "no_key", "no GEMINI_API_KEY")
+        assert engine._latest_failed_sleeves(conn, "live") == []
+    finally:
+        conn.close(); os.unlink(p)
+
+
+def test_a_good_decision_is_not_retried():
+    conn, p = make_db()
+    try:
+        engine._record(conn, "live", "swing", "held", "chose to hold")
+        engine._record(conn, "live", "fortnight", "executed", "")
+        assert engine._latest_failed_sleeves(conn, "live") == []
+    finally:
+        conn.close(); os.unlink(p)
+
+
+def test_invalid_schedules_a_retry():
+    """_note_retry_state gates whether a retry is PENDING at all — 'invalid' was
+    excluded there too, so nothing was ever scheduled."""
+    conn, p = make_db()
+    try:
+        engine._note_retry_state(conn, [{"sleeve": "swing", "status": "invalid"}],
+                                 fresh_cycle=True)
+        assert db.get_setting(conn, "retry_cycle_at")        # a retry IS pending
+    finally:
+        conn.close(); os.unlink(p)

@@ -225,11 +225,15 @@ def _market_context(conn, include_swing_4h: bool):
 
 
 def _failed_sleeves(results: list[dict]) -> list[str]:
-    """Sleeves that errored on a transient failure (worth a soon retry).
+    """Sleeves the brain gave us nothing usable for (worth a soon retry).
 
-    'no_key'/'invalid' won't fix themselves, so they don't schedule a retry."""
+    'invalid' USED to be excluded here on the grounds that it 'won't fix itself'. That
+    was wrong (#65): a malformed answer — a JSON array, a bad action — is the model
+    fluffing one response, and the same prompt routinely answers cleanly on the next
+    ask. It is exactly as transient as a 503, and it was costing a live sleeve its whole
+    decision slot. 'no_key' genuinely won't fix itself, so it still schedules nothing."""
     return [r["sleeve"] for r in results
-            if r.get("status") == "error" and r.get("sleeve")]
+            if r.get("status") in RETRYABLE and r.get("sleeve")]
 
 
 def _note_retry_state(conn, results: list[dict], *, fresh_cycle: bool) -> None:
@@ -257,14 +261,24 @@ def retry_sleeves(conn, mode: str, sleeve_names: list[str]) -> list[dict]:
     return [run_sleeve(conn, mode, s, prices, market_data, extras) for s in names]
 
 
+# Statuses that mean "the brain gave us nothing usable THIS time" — both transient,
+# so both earn another ask (#65). 'error' is a failed call (503/429/timeout); 'invalid'
+# is a call that succeeded and came back malformed — a JSON array, a bad action, a pair
+# outside the universe. The same prompt routinely answers cleanly on the next attempt,
+# so there is no principled reason a network blip gets a second chance and a formatting
+# blip does not: in both cases nobody was home. 'no_key' stays out — that is a permanent
+# configuration fault, and retrying it would just hammer a wall.
+RETRYABLE = ("error", "invalid")
+
+
 def _latest_failed_sleeves(conn, mode: str) -> list[str]:
-    """Sleeves whose most recent decision errored (candidates to retry now)."""
+    """Sleeves whose most recent decision gave us nothing usable (retry candidates)."""
     out = []
     for s in sleeves.ALL:
         row = conn.execute(
             "SELECT status FROM decisions WHERE mode=? AND sleeve=? ORDER BY id DESC LIMIT 1",
             (mode, s)).fetchone()
-        if row and row["status"] == "error":
+        if row and row["status"] in RETRYABLE:
             out.append(s)
     return out
 
