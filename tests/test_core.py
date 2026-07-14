@@ -534,3 +534,39 @@ def test_trade_notification_is_never_cut_mid_word():
     assert out.endswith("…")                     # and it SAYS it was trimmed
     assert not out.rstrip("…").endswith("wor")   # never mid-word
     assert _clip("") == "" and _clip("short") == "short"
+
+
+def test_a_garbage_answer_cannot_kill_the_other_sleeves(monkeypatch):
+    """#63 blast radius. run_sleeve caught only AdvisorError, so a validator crash
+    escaped the list comprehension in run_cycle and killed the entire cycle: the
+    sleeve wrote NO decision row at all (not even 'invalid'), and a missing row reads
+    exactly like a considered quiet day. One bad answer must cost one sleeve, and the
+    others must still decide."""
+    conn, p = make_db()
+    try:
+        # swing's brain returns a JSON list; fortnight's answers properly
+        answers = {"swing": '[{"action": "buy"}]',
+                   "fortnight": '{"action": "hold", "confidence": 0.5, "reasoning": "ok"}'}
+        asked = {"sleeve": None}
+        monkeypatch.setattr(advisor, "build_prompt",
+                            lambda *a, **kw: "prompt for " + (asked["sleeve"] or "?"))
+        monkeypatch.setattr(advisor, "ask",
+                            lambda prompt, deep=False: answers[asked["sleeve"]])
+
+        results = []
+        for sleeve in ("swing", "fortnight"):
+            asked["sleeve"] = sleeve
+            results.append(engine.run_sleeve(conn, "paper", sleeve, {}, [], {}))
+
+        assert results[0]["status"] == "invalid"      # the bad one fails honestly...
+        assert results[1]["status"] == "held"         # ...and the next sleeve still decides
+
+        rows = conn.execute(
+            "SELECT sleeve, status, response_raw FROM decisions WHERE mode='paper' ORDER BY sleeve"
+        ).fetchall()
+        got = {r[0]: (r[1], r[2]) for r in rows}
+        assert got["swing"][0] == "invalid"           # a ROW EXISTS -- not silence
+        assert '[{"action": "buy"}]' in got["swing"][1]   # and it keeps the raw answer
+        assert got["fortnight"][0] == "held"
+    finally:
+        conn.close(); os.unlink(p)

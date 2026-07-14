@@ -78,7 +78,11 @@ def run_sleeve(conn, mode: str, sleeve: str, prices: dict, market_data: list[dic
         return {"sleeve": sleeve, "status": status, "detail": str(e)}
     try:
         decision = advisor.validate(raw)
-    except advisor.AdvisorError as e:
+    except Exception as e:  # noqa: BLE001 - a garbage answer must never kill the cycle
+        # AdvisorError is the expected path. Anything else is a validator bug meeting
+        # a shape we did not anticipate -- and one sleeve's bad answer must never stop
+        # the other sleeves from deciding (a sleeve killed mid-loop writes no row at
+        # all, and a missing row reads exactly like a considered quiet day).
         _record(conn, mode, sleeve, "invalid", str(e), prompt=prompt, raw=raw)
         return {"sleeve": sleeve, "status": "invalid", "detail": str(e)}
 

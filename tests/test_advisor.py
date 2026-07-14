@@ -270,3 +270,29 @@ def test_the_default_models_are_not_a_retired_model(monkeypatch):
     assert "gemini-2.5-pro" not in (fast, deep)
     assert fast == "gemini-2.5-flash"
     assert deep == "gemini-2.5-flash"   # out of the box: works, free tier, no 404
+
+
+# --- #63: parseable is not the same as usable -----------------------------
+
+@pytest.mark.parametrize("raw, kind", [
+    ('[{"action": "buy", "pair": "BTC/EUR", "fraction": 0.5}]', "list"),
+    ('"hold"', "str"),
+    ('42', "int"),
+    ('null', "NoneType"),
+    ('true', "bool"),
+])
+def test_validate_rejects_a_non_object_answer(raw, kind):
+    """The brain once answered with a JSON LIST. json.loads() happily returned it, and
+    validate() then called .get() on a list -> AttributeError, which is NOT an
+    AdvisorError, so it escaped run_sleeve and took the WHOLE cycle down (#63).
+    Every non-object shape must fail as an AdvisorError = a safe HOLD."""
+    with pytest.raises(advisor.AdvisorError) as ei:
+        advisor.validate(raw)
+    assert "expected a JSON object" in str(ei.value)
+    assert kind in str(ei.value)
+
+
+def test_validate_still_accepts_a_fenced_object():
+    """The guard must not break the normal path."""
+    d = advisor.validate(ANSWER)
+    assert d["action"] in ("buy", "sell", "hold")

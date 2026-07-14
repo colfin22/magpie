@@ -403,6 +403,11 @@ def validate(raw: str) -> dict:
         d = json.loads(raw)
     except json.JSONDecodeError as e:
         raise AdvisorError(f"unparseable response: {e}") from e
+    # Parseable is not the same as usable: a list, a bare string, a number and null
+    # all survive json.loads. Reaching .get() on those raises AttributeError, which
+    # is NOT an AdvisorError -- so it escapes run_sleeve and kills the whole cycle.
+    if not isinstance(d, dict):
+        raise AdvisorError(f"expected a JSON object, got {type(d).__name__}")
     action = str(d.get("action", "")).lower()
     if action not in ("buy", "sell", "hold"):
         raise AdvisorError(f"invalid action {d.get('action')!r}")
