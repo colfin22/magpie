@@ -5,6 +5,7 @@ ntfy are optional extras. Each channel fires only when its own config is present
 so you can enable one, several or none, and one failing channel never blocks the
 rest. (Module is named `ha` for historical reasons — it's the app-wide notify
 dispatcher; every `ha.notify(...)` call reaches all channels.)"""
+import html
 import logging
 
 import httpx
@@ -70,18 +71,25 @@ def _discord(title, message):
 def _telegram(title, message):
     if not (config.TELEGRAM_BOT_TOKEN and config.TELEGRAM_CHAT_ID):
         return None
-    # PLAIN TEXT, no parse_mode (#75). Legacy Markdown makes Telegram reject the WHOLE
-    # message with a 400 on an unbalanced *, _, ` or [ — and these messages carry
-    # free-form model prose ("EMA_20 crossed the EMA_50..." has an odd number of
-    # underscores). So the pushes most worth receiving — a real trade, a dead arm, the
-    # monthly review — were the ones that could not be sent. A notification must never be
-    # made unsendable by its own contents.
-    text = f"{title}\n{message}"
+    # HTML mode, with EVERY interpolated value ESCAPED (#75, PR #76).
+    #
+    # Legacy Markdown rejected the WHOLE message with a 400 on an unbalanced *, _, ` or [
+    # — and these messages carry free-form model prose ("EMA_20 crossed the EMA_50" has an
+    # odd number of underscores). So the pushes most worth receiving — a real trade, a
+    # dead arm, the monthly review — were exactly the ones that could not be sent.
+    #
+    # HTML mode ALONE does not fix that: Telegram 400s on an unescaped <, > or & just as
+    # readily, and trading prose is full of them ("RSI < 30", "risk & reward"). It only
+    # swaps which characters are fatal. The escaping is the part that actually closes the
+    # failure mode — then the formatting is free.
+    #
+    # A notification must never be made unsendable by its own contents.
+    text = f"<b>{html.escape(title)}</b>\n{html.escape(message)}"
     if _click():
-        text += f"\n{_click()}"
+        text += f"\n{html.escape(_click())}"
     r = httpx.post(f"https://api.telegram.org/bot{config.TELEGRAM_BOT_TOKEN}/sendMessage",
                    json={"chat_id": config.TELEGRAM_CHAT_ID, "text": text,
-                         "disable_web_page_preview": True}, timeout=_T)
+                         "parse_mode": "HTML", "disable_web_page_preview": True}, timeout=_T)
     r.raise_for_status()
     return True
 

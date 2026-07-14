@@ -80,3 +80,36 @@ def test_one_channel_failure_does_not_block_others(monkeypatch):
     rec = Rec(fail_on="pushover"); monkeypatch.setattr(ha, "httpx", rec)
     assert ha.notify("t", "m") is True                     # ntfy still delivered
     assert any("ntfy.sh/topic" in u for u, _ in rec.calls)
+
+
+# --- #75 / PR #76: model prose must never make a message unsendable -----------
+
+def test_telegram_escapes_prose_that_would_otherwise_400(monkeypatch):
+    """Telegram rejects the WHOLE message with a 400 on markup its parser cannot read.
+    Markdown died on an unbalanced _ or *; HTML dies just as readily on a bare < or & --
+    and trading prose is full of both ("RSI < 30 and risk & reward favour the entry").
+    Switching parse mode only changes WHICH characters are fatal. Escaping is what
+    actually closes it, and then the bold title is free."""
+    sent = {}
+
+    class R:
+        def raise_for_status(self):
+            pass
+
+    def fake_post(url, json=None, timeout=None, **kw):
+        sent.update(json)
+        return R()
+
+    monkeypatch.setattr(config, "TELEGRAM_BOT_TOKEN", "t")
+    monkeypatch.setattr(config, "TELEGRAM_CHAT_ID", "c")
+    monkeypatch.setattr(ha.httpx, "post", fake_post)
+
+    ha._telegram("Magpie [swing] traded",
+                 "BUY BTC/EUR — RSI < 30 & EMA_20 crossed the EMA_50")
+
+    assert sent["parse_mode"] == "HTML"
+    body = sent["text"]
+    assert "<b>Magpie [swing] traded</b>" in body        # the title is still bold
+    assert "RSI &lt; 30 &amp; EMA_20" in body            # the prose is neutralised
+    # nothing the model wrote is left as raw markup Telegram would choke on
+    assert "< 30" not in body and "& EMA" not in body
