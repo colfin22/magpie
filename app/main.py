@@ -268,6 +268,8 @@ def health():
             "healthy": healthy,
             "last_decision": dict(last) if last else None,
             "last_equity_eur": round(snap["t"], 2) if snap and snap["t"] else None,
+            # a notification nobody received, surfaced where a person looks (#62)
+            "notify_failures": ha.LAST_FAILURES or None,
         }
         # 503 when unhealthy (#75). A monitor that checks the STATUS CODE rather than the
         # body was showing green through a total brain outage. The code must not disagree
