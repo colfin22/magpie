@@ -421,10 +421,20 @@ def self_review() -> dict:
         orders = [dict(r) for r in conn.execute(
             "SELECT at, sleeve, pair, side, price, cost, fee FROM orders "
             "WHERE mode=? AND at >= date('now','-31 days') ORDER BY id", (mode,))]
+        # ONE row per day = the portfolio's CLOSING equity that day (#74). The old query
+        # grouped by (day, sleeve) without selecting sleeve, SUMMed every snapshot in the
+        # day, and filtered on a bare `HAVING id=MAX(id)` -- so the model was shown four
+        # unlabelled rows per day, none of them the portfolio (measured live: 111.79 /
+        # 111.79 / 112.24 / 0.00 for a day whose real equity was 48.10). It then wrote
+        # "lessons" from that, and the lessons are injected into EVERY future decision
+        # prompt on the live-money path.
         equity = [dict(r) for r in conn.execute(
-            "SELECT substr(at,1,10) day, ROUND(SUM(total_eur),2) eur FROM snapshots "
-            "WHERE mode=? AND at >= date('now','-31 days') GROUP BY day, sleeve "
-            "HAVING id=MAX(id)", (mode,))]
+            "SELECT d AS day, ROUND(SUM(total_eur),2) AS eur FROM ("
+            "  SELECT substr(at,1,10) d, sleeve, total_eur FROM snapshots "
+            "  WHERE mode=? AND at >= date('now','-31 days') "
+            "    AND id IN (SELECT MAX(id) FROM snapshots WHERE mode=? "
+            "               GROUP BY substr(at,1,10), sleeve)"
+            ") GROUP BY d ORDER BY d", (mode, mode))]
         if not decisions:
             return {"status": "skipped", "detail": "no decisions to review yet"}
         trips = ledger.round_trips(conn, mode)

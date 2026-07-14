@@ -22,7 +22,10 @@ def test_no_password_means_open(client, monkeypatch):
 
 def test_gated_when_password_set(client, monkeypatch):
     monkeypatch.setattr(config, "DASHBOARD_PASSWORD", "hunter2")
-    assert client.get("/health").status_code == 200            # public
+    # public = not gated. NB /health answers 503 when the bot is unhealthy (#75), and a
+    # fresh fixture DB has never run a cycle, so it is stale by definition — assert what
+    # this test actually means (no auth wall), not a status code it never cared about.
+    assert client.get("/health").status_code != 401            # public
     assert client.post("/api/cycle") is not None               # public path (won't 401)
     assert client.post("/api/cycle").status_code != 401
     r = client.get("/api/settings")                            # gated

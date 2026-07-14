@@ -49,11 +49,17 @@ def grade(conn, limit: int = 500) -> dict:
 
     Graded across ALL modes, so the shadow arms get a calibration record too.
     """
+    # confidence IS NOT NULL = the BRAIN made this call (#73). A stop-loss firing and a
+    # universe auto-sell both write an executed 'sell' decision row with confidence=NULL,
+    # because no model claimed anything. Grading them measured the market, not the bot:
+    # a stop fires AFTER a fall, so its forward move is systematically biased, and it was
+    # being folded into a hit rate captioned "every buy/sell is a falsifiable claim about
+    # direction". A liquidation is the opposite of a claim.
     rows = conn.execute(
         "SELECT d.id, d.at, d.mode, d.sleeve, d.action, d.pair, d.confidence "
         "FROM decisions d LEFT JOIN scores s ON s.decision_id = d.id "
         "WHERE s.decision_id IS NULL AND d.action IN ('buy','sell') "
-        "AND d.status='executed' AND d.pair IS NOT NULL "
+        "AND d.status='executed' AND d.pair IS NOT NULL AND d.confidence IS NOT NULL "
         "ORDER BY d.id LIMIT ?", (limit,)).fetchall()
     graded = skipped = 0
     for d in rows:

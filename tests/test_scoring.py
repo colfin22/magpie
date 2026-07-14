@@ -141,3 +141,27 @@ def test_arms_get_a_calibration_record_too():
 def test_review_prompt_carries_the_measured_record():
     assert "{calibration}" in engine.REVIEW_PROMPT
     assert "measured, not remembered" in engine.REVIEW_PROMPT
+
+
+# --- #73: a liquidation is not a prediction ----------------------------------
+
+def test_a_stop_loss_sell_is_not_graded():
+    """A stop firing writes an executed 'sell' decision with confidence=NULL, because no
+    model claimed anything. Grading it measured the MARKET, not the bot: a stop fires
+    AFTER a fall, so its forward move is systematically biased, and it was being folded
+    into a hit rate captioned 'every buy/sell is a falsifiable claim about direction'.
+    A liquidation is the opposite of a claim (#73)."""
+    conn, p = make_db()
+    try:
+        for d in range(10, -1, -1):
+            add_candle(conn, "BTC/EUR", midnight(d), 100.0)
+        forced = add_decision(conn, midnight(9) + timedelta(hours=12), "swing", "sell",
+                              "BTC/EUR", None)          # a stop-loss: no confidence
+        brain = add_decision(conn, midnight(9) + timedelta(hours=12), "swing", "buy",
+                             "BTC/EUR", 0.8)            # a real call
+        scoring.grade(conn)
+        graded = [r[0] for r in conn.execute("SELECT decision_id FROM scores")]
+        assert brain in graded
+        assert forced not in graded, "a forced exit was graded as if the brain predicted it"
+    finally:
+        conn.close(); os.unlink(p)

@@ -3,7 +3,7 @@ import threading
 from contextlib import contextmanager
 
 from fastapi import Body, FastAPI, Form
-from fastapi.responses import HTMLResponse, RedirectResponse, Response
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 
 from . import (__version__, advisor, arms, auth, config, db, engine, ha, ledger, market,
                portfolio, scoring, stops, universe)
@@ -256,7 +256,8 @@ def health():
                    - datetime.fromisoformat(last_cycle)).total_seconds()
             stale = age > config.STALE_AFTER_S
         failures = int(db.get_setting(conn, "consecutive_failures", "0") or 0)
-        return {
+        healthy = not stale and failures < config.ERROR_ALERT_AFTER
+        body = {
             "ok": True, "version": __version__, "mode": config.mode(),
             "halted": db.get_setting(conn, "halted") == "1",
             "llm_provider": advisor.active_provider(),
@@ -264,10 +265,14 @@ def health():
             "last_cycle_at": last_cycle,
             "stale": stale,                    # no cycle within STALE_AFTER_S (#1)
             "consecutive_failures": failures,  # cycles failing in a row (#2)
-            "healthy": not stale and failures < config.ERROR_ALERT_AFTER,
+            "healthy": healthy,
             "last_decision": dict(last) if last else None,
             "last_equity_eur": round(snap["t"], 2) if snap and snap["t"] else None,
         }
+        # 503 when unhealthy (#75). A monitor that checks the STATUS CODE rather than the
+        # body was showing green through a total brain outage. The code must not disagree
+        # with the payload. (Keyword monitors are unaffected — the body is unchanged.)
+        return JSONResponse(body, status_code=200 if healthy else 503)
     finally:
         conn.close()
 

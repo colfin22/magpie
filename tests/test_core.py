@@ -849,3 +849,69 @@ def test_a_raw_exception_from_the_brain_only_costs_that_sleeve(monkeypatch):
         assert row[0] == "error"                            # a row EXISTS -- not silence
     finally:
         conn.close(); os.unlink(p)
+
+
+# --- #74: the self-review must see the PORTFOLIO, one row per day -------------
+
+def test_self_review_equity_is_one_row_per_day_and_is_the_portfolio(monkeypatch):
+    """The old query grouped by (day, sleeve) without selecting sleeve, SUMmed every
+    snapshot in the day, and filtered on a bare HAVING id=MAX(id) -- so the model was
+    shown four unlabelled rows per day, NONE of them the portfolio (measured live:
+    111.79/111.79/112.24/0.00 for a day whose real equity was 48.10). It then wrote
+    'lessons' from that, and the lessons go into EVERY future decision prompt (#74)."""
+    conn, p = make_db()
+    try:
+        def snap(at, sleeve, eur):
+            conn.execute("INSERT INTO snapshots(at, mode, sleeve, total_eur, holdings, prices)"
+                         " VALUES(?,?,?,?,?,?)", (at, "live", sleeve, eur, "{}", "{}"))
+
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        for hour, eur in (("06", 10.0), ("12", 20.0), ("18", 30.0)):   # 3 cycles that day
+            snap(f"{today}T{hour}:00:00+00:00", "swing", eur)
+            snap(f"{today}T{hour}:00:00+00:00", "fortnight", eur)
+        conn.commit()
+
+        rows = [dict(r) for r in conn.execute(
+            "SELECT d AS day, ROUND(SUM(total_eur),2) AS eur FROM ("
+            "  SELECT substr(at,1,10) d, sleeve, total_eur FROM snapshots "
+            "  WHERE mode=? AND at >= date('now','-31 days') "
+            "    AND id IN (SELECT MAX(id) FROM snapshots WHERE mode=? "
+            "               GROUP BY substr(at,1,10), sleeve)"
+            ") GROUP BY d ORDER BY d", ("live", "live"))]
+
+        assert len(rows) == 1, "one row per day, not one per sleeve per cycle"
+        assert rows[0]["eur"] == 60.0, "must be the day's CLOSING equity across sleeves"
+
+        import inspect
+        src = inspect.getsource(engine.self_review)
+        assert "GROUP BY day, sleeve" not in src, "the malformed equity query is back (#74)"
+    finally:
+        conn.close(); os.unlink(p)
+
+
+# --- #75: the status code must not disagree with the payload ------------------
+
+def test_health_returns_503_when_unhealthy(monkeypatch):
+    """A monitor checking the STATUS CODE rather than the body was showing green through
+    a total brain outage (#75)."""
+    from fastapi.testclient import TestClient
+    from app import main
+
+    conn, p = make_db()
+    try:
+        real_connect = db.connect
+        monkeypatch.setattr(main.db, "connect", lambda *a, **k: real_connect(p))
+        client = TestClient(main.app)
+
+        r = client.get("/health")                       # no cycle ever -> stale
+        assert r.json()["healthy"] is False
+        assert r.status_code == 503, "an unhealthy bot must not answer 200"
+
+        db.set_setting(conn, "last_cycle_at",
+                       datetime.now(timezone.utc).isoformat(timespec="seconds"))
+        db.set_setting(conn, "consecutive_failures", "0")
+        conn.commit()
+        r = client.get("/health")
+        assert r.json()["healthy"] is True and r.status_code == 200
+    finally:
+        conn.close(); os.unlink(p)

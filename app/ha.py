@@ -70,12 +70,18 @@ def _discord(title, message):
 def _telegram(title, message):
     if not (config.TELEGRAM_BOT_TOKEN and config.TELEGRAM_CHAT_ID):
         return None
-    text = f"*{title}*\n{message}"
+    # PLAIN TEXT, no parse_mode (#75). Legacy Markdown makes Telegram reject the WHOLE
+    # message with a 400 on an unbalanced *, _, ` or [ — and these messages carry
+    # free-form model prose ("EMA_20 crossed the EMA_50..." has an odd number of
+    # underscores). So the pushes most worth receiving — a real trade, a dead arm, the
+    # monthly review — were the ones that could not be sent. A notification must never be
+    # made unsendable by its own contents.
+    text = f"{title}\n{message}"
     if _click():
         text += f"\n{_click()}"
     r = httpx.post(f"https://api.telegram.org/bot{config.TELEGRAM_BOT_TOKEN}/sendMessage",
                    json={"chat_id": config.TELEGRAM_CHAT_ID, "text": text,
-                         "parse_mode": "Markdown", "disable_web_page_preview": True}, timeout=_T)
+                         "disable_web_page_preview": True}, timeout=_T)
     r.raise_for_status()
     return True
 
@@ -109,5 +115,9 @@ def notify(title: str, message: str) -> bool:
     if sent:
         LOGGER.info("notify sent via %s: %s", ", ".join(sent), title)
         return True
-    LOGGER.info("notify: no channel configured/delivered: %s", title)
+    # A notification nobody received is an event in itself (#75). This used to be logged
+    # at INFO and every caller discards the return value — so the bot could move real
+    # money, or announce that it was failing, into a void.
+    LOGGER.error("NOTIFY REACHED NOBODY: %r — no channel configured, or every one failed",
+                 title)
     return False
