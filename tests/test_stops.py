@@ -329,3 +329,28 @@ def test_a_failed_sell_re_rests_the_stop(monkeypatch):
         assert still[0]["stop_price"] == placed["stop_price"], "re-rested at the wrong trigger"
     finally:
         conn.close(); os.unlink(p)
+
+
+# --- #72: a recovered buy must get its stop-loss ------------------------------
+
+def test_recovery_is_called_at_the_start_of_every_cycle():
+    """recover_inflight was wired ONLY to the startup hook, so a real fill that execute()
+    failed to book could sit unrecorded for WEEKS -- while the nightly reconcile laundered
+    the coins in as 'drift' onto the wrong sleeves, and the retry timer bought again on
+    top of it. It must run before every cycle looks at balances (#72)."""
+    import inspect
+    from app import engine
+    src = inspect.getsource(engine.run_cycle)
+    assert "recover_inflight" in src, "a cycle must recover in-flight orders first (#72)"
+    assert src.index("recover_inflight") < src.index("detect_topup"), \
+        "recovery must run before balances are read"
+
+
+def test_a_recovered_buy_gets_a_stop_loss():
+    """Recovery exists for a crash INSIDE the fill window. The normal path places a stop
+    on every buy -- so without this, the one trade that went wrong is the one that ends up
+    with no stop at Kraken, while the dashboard shows the sleeve as protected (#72)."""
+    import inspect
+    from app import portfolio
+    src = inspect.getsource(portfolio.recover_inflight)
+    assert "stops.place" in src, "a recovered buy must re-rest its stop-loss (#72)"

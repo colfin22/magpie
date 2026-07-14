@@ -762,3 +762,90 @@ def test_the_lock_is_released_when_a_run_raises(monkeypatch):
 
     monkeypatch.setattr(main.engine, "run_cycle", lambda now=None: {"status": "ok"})
     assert client.post("/api/cycle").json()["status"] == "ok"   # not wedged
+
+
+# --- #69: a shadow arm's book must never surface as the bot's -----------------
+
+def test_health_reports_the_bot_not_the_last_shadow_arm(monkeypatch):
+    """The arms snapshot AFTER the bot each cycle, so an unfiltered MAX(id) GROUP BY
+    sleeve always resolved to the LAST ARM's book. /health -- public, and what the uptime
+    monitor and the dashboard tile scrape -- was publishing a simulated coin-flip rival's
+    equity as the operator's money (measured live: 95.79 shown vs 94.75 real) (#69)."""
+    from fastapi.testclient import TestClient
+    from app import main
+
+    conn, p = make_db()
+    try:
+        real_connect = db.connect
+        monkeypatch.setattr(main.db, "connect", lambda *a, **k: real_connect(p))
+        monkeypatch.setattr(main.config, "mode", lambda: "live")
+
+        def snap(mode, sleeve, eur):
+            conn.execute("INSERT INTO snapshots(at, mode, sleeve, total_eur, holdings, prices) "
+                         "VALUES(?,?,?,?,?,?)",
+                         ("2026-07-14T12:00:00+00:00", mode, sleeve, eur, "{}", "{}"))
+
+        snap("live", "swing", 94.75)                 # the bot, written FIRST
+        snap("shadow:coinflip", "swing", 1340.00)    # the arm, written AFTER -> higher id
+        engine._record(conn, "live", "swing", "held", "chose to hold")
+        engine._record(conn, "shadow:coinflip", "swing", "executed", "coin flip")
+        conn.commit()
+
+        h = TestClient(main.app).get("/health").json()
+        assert h["last_equity_eur"] == 94.75, "health is reporting a shadow arm's equity"
+        assert h["last_decision"]["status"] == "held", "health is reporting an arm's decision"
+    finally:
+        conn.close(); os.unlink(p)
+
+
+# --- #70: a cycle-level failure must be routable to the retry path ------------
+
+def test_a_dead_exchange_is_recorded_against_every_due_sleeve(monkeypatch):
+    """#64 made the failure visible but filed it under sleeve='' -- and the retry driver
+    looks up the latest decision PER SLEEVE NAME, so the row was unroutable. The bot was
+    visibly broken and quietly unrecoverable: quarter would lose a week, the vault a
+    month, while the retry timer reported nothing to do every ten minutes (#70)."""
+    conn, p = make_db()
+    try:
+        real_connect = db.connect
+        monkeypatch.setattr(engine.db, "connect", lambda *a, **k: real_connect(p))
+        monkeypatch.setattr(engine.config, "mode", lambda: "live")
+        monkeypatch.setattr(engine.sleeves, "due", lambda s, now=None: s in ("swing", "fortnight"))
+        monkeypatch.setattr(engine.portfolio, "recover_inflight", lambda c, m: [])
+
+        def dead(*a, **k):
+            raise RuntimeError("kraken: read timed out")
+
+        monkeypatch.setattr(engine, "_market_context", dead)
+
+        out = engine.run_cycle()
+        assert out["status"] == "error"
+
+        check = real_connect(p)
+        # the retry path can SEE it now
+        assert sorted(engine._latest_failed_sleeves(check, "live")) == ["fortnight", "swing"]
+        check.close()
+    finally:
+        conn.close(); os.unlink(p)
+
+
+# --- #71: no provider misbehaviour may kill the cycle ------------------------
+
+def test_a_raw_exception_from_the_brain_only_costs_that_sleeve(monkeypatch):
+    """ask() only CONVERTS httpx.HTTPError/KeyError/IndexError into AdvisorError. A
+    provider returning content:null raises AttributeError, which escaped a narrow
+    `except AdvisorError` and killed the whole cycle -- the #63 crash, one line up (#71)."""
+    conn, p = make_db()
+    try:
+        monkeypatch.setattr(advisor, "build_prompt", lambda *a, **kw: "p")
+
+        def content_was_null(prompt, deep=False):
+            raise AttributeError("'NoneType' object has no attribute 'strip'")
+
+        monkeypatch.setattr(advisor, "ask", content_was_null)
+        r = engine.run_sleeve(conn, "paper", "swing", {}, [], {})
+        assert r["status"] == "error"                       # recorded, not raised
+        row = conn.execute("SELECT status FROM decisions WHERE sleeve='swing'").fetchone()
+        assert row[0] == "error"                            # a row EXISTS -- not silence
+    finally:
+        conn.close(); os.unlink(p)

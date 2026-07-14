@@ -72,7 +72,12 @@ def run_sleeve(conn, mode: str, sleeve: str, prices: dict, market_data: list[dic
         topup=portfolio.undeployed_topup(conn, mode, sleeve))
     try:
         raw = advisor.ask(prompt, deep=sleeve in DEEP_SLEEVES)
-    except advisor.AdvisorError as e:
+    except Exception as e:  # noqa: BLE001 - a provider's misbehaviour must never kill the cycle
+        # AdvisorError is the expected path. But ask() only CONVERTS an allowlist of
+        # exception types (httpx.HTTPError/KeyError/IndexError) -- a provider returning
+        # content:null, or a gateway serving HTML with a 200, raises AttributeError or
+        # ValueError instead, which escaped straight past a narrow `except AdvisorError`
+        # and killed the whole cycle: the same crash as #63, one line further up (#71).
         status = "no_key" if "no GEMINI_API_KEY" in str(e) else "error"
         _record(conn, mode, sleeve, status, str(e), prompt=prompt)
         return {"sleeve": sleeve, "status": status, "detail": str(e)}
@@ -142,6 +147,20 @@ def run_cycle(now=None) -> dict:
             _record(conn, mode, "", "halted", "kill switch is on")
             return {"status": "halted", "stops_fired": fired}
 
+        # Adopt or cancel anything left in flight by an interrupted fill BEFORE we look at
+        # balances or ask the brain anything. This used to run only at process startup, so
+        # a real fill that execute() failed to book could sit unrecorded for WEEKS -- while
+        # the nightly reconcile laundered the coins in as "drift" onto the wrong sleeves,
+        # and the retry timer, seeing that sleeve's decision as 'error', bought again on
+        # top of it (#72).
+        try:
+            recovered = portfolio.recover_inflight(conn, mode)
+            for r in recovered:
+                LOGGER.warning("recovered in-flight %s on %s: %s",
+                               r.get("side"), r.get("pair"), r.get("outcome"))
+        except Exception as e:  # noqa: BLE001 - recovery must never take the cycle down
+            LOGGER.error("in-flight recovery failed: %s", e)
+
         due_now = [s for s in sleeves.ALL if sleeves.due(s, now)]
         try:
             prices, market_data, extras = _market_context(conn, "swing" in due_now)
@@ -151,9 +170,17 @@ def run_cycle(now=None) -> dict:
             # and a sleeve with no row is invisible to the retry path -- the slot is lost
             # and the diary shows a quiet day. So fail LOUDLY and on the record (#64).
             LOGGER.error("market data unavailable — cycle abandoned: %s", e)
-            _record(conn, mode, "", "error", f"market data unavailable: {e}")
-            _track_cycle_outcome(conn, [], crashed=True)
-            return {"status": "error", "detail": f"market data unavailable: {e}"}
+            # Record it against EVERY SLEEVE THAT WAS DUE, not against sleeve='' (#70).
+            # The retry driver looks up the latest decision per sleeve name, so a row
+            # filed under '' is UNROUTABLE: the failure was visible but could never be
+            # retried, and quarter would lose a week, the vault a month, while the retry
+            # timer reported nothing to do every ten minutes.
+            detail = f"market data unavailable: {e}"
+            for s in due_now:
+                _record(conn, mode, s, "error", detail)
+            _track_cycle_outcome(conn, [{"sleeve": s, "status": "error"} for s in due_now],
+                                 crashed=not due_now)
+            return {"status": "error", "detail": detail, "sleeves": due_now}
 
         # ORDER MATTERS (#66). Claim any fired stop as a SALE *before* the top-up
         # detector looks at the balance. detect_topup() is only "EUR at the exchange
@@ -335,7 +362,10 @@ def daily_digest() -> dict:
             (mode, mode)).fetchone()
         day0 = first["s"] if first and first["s"] else ov["total_eur"]
         delta = ov["total_eur"] - day0
-        trades = conn.execute("SELECT COUNT(*) c FROM orders WHERE at >= date('now')").fetchone()["c"]
+        # mode=? -- the shadow arms fill orders too, and "14 trades" in a push about REAL
+        # money must not be counting a coin-flip's simulated fills (#69)
+        trades = conn.execute("SELECT COUNT(*) c FROM orders WHERE mode=? AND at >= date('now')",
+                              (mode,)).fetchone()["c"]
         bits = []
         for v in ov["sleeves"]:
             assets = [k for k in v["holdings"] if k != config.BASE_CURRENCY]

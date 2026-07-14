@@ -473,6 +473,16 @@ def recover_inflight(conn, mode: str) -> list[dict]:
                          ("recovered after a restart interrupted the fill — booked from the "
                           "exchange's own record", decision_id))
             conn.commit()
+            # Put the floor back. Recovery exists for a crash INSIDE the fill window, and
+            # the normal path places a stop on every buy -- so without this, the one trade
+            # that went wrong is the one that ends up with no stop at Kraken and no stops
+            # row, while the dashboard still shows the sleeve as protected by policy (#72).
+            if side == "buy":
+                try:
+                    stops.place(conn, mode, sleeve, pair, amount, f["price"], None)
+                except Exception as e:  # noqa: BLE001 - a missing stop must not abort recovery
+                    LOGGER.error("[%s/%s] RECOVERED a buy but could not rest its stop-loss on "
+                                 "%s (%s) — THE POSITION HAS NO FLOOR", mode, sleeve, pair, e)
             LOGGER.warning("[%s/%s] RECOVERED an interrupted %s: %.8f %s @ %.6f",
                            mode, sleeve, side, amount, asset, f["price"])
             out.append({"decision_id": decision_id, "outcome": "adopted", "sleeve": sleeve,

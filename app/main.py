@@ -238,9 +238,16 @@ def api_2fa_disable(body: dict = Body(...)):
 def health():
     conn = db.connect()
     try:
-        last = conn.execute("SELECT at, sleeve, status FROM decisions ORDER BY id DESC LIMIT 1").fetchone()
+        # mode=? on BOTH (#69). The shadow arms write their snapshots AFTER the bot each
+        # cycle, so an unfiltered MAX(id) GROUP BY sleeve always resolved to the LAST
+        # ARM's book -- /health was publishing a simulated coin-flip rival's equity as
+        # the operator's money, on the endpoint the uptime monitor and dashboard scrape.
+        m = config.mode()
+        last = conn.execute("SELECT at, sleeve, status FROM decisions WHERE mode=? "
+                            "ORDER BY id DESC LIMIT 1", (m,)).fetchone()
         snap = conn.execute("SELECT SUM(total_eur) t FROM snapshots WHERE id IN "
-                            "(SELECT MAX(id) FROM snapshots GROUP BY sleeve)").fetchone()
+                            "(SELECT MAX(id) FROM snapshots WHERE mode=? GROUP BY sleeve)",
+                            (m,)).fetchone()
         from datetime import datetime, timezone
         last_cycle = db.get_setting(conn, "last_cycle_at")
         stale = True
@@ -558,7 +565,8 @@ def api_state():
             "FROM decisions WHERE mode=? AND at >= datetime('now','-24 hours') "
             "ORDER BY id DESC LIMIT 50", (config.mode(),))]
         skims = [dict(r) for r in conn.execute(
-            "SELECT at, sleeve, amount FROM skims ORDER BY id DESC LIMIT 10")]
+            "SELECT at, sleeve, amount FROM skims WHERE mode=? ORDER BY id DESC LIMIT 10",
+            (config.mode(),))]        # the arms skim into their own books too (#69)
         curve = [dict(r) for r in conn.execute(
             "SELECT substr(at,1,16) t, ROUND(SUM(total_eur),2) eur FROM snapshots "
             "WHERE mode=? GROUP BY t ORDER BY t DESC LIMIT 400", (config.mode(),))]
