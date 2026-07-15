@@ -274,22 +274,67 @@ def test_the_default_models_are_not_a_retired_model(monkeypatch):
 
 # --- #63: parseable is not the same as usable -----------------------------
 
-@pytest.mark.parametrize("raw, kind", [
-    ('[{"action": "buy", "pair": "BTC/EUR", "fraction": 0.5}]', "list"),
-    ('"hold"', "str"),
-    ('42', "int"),
-    ('null', "NoneType"),
-    ('true', "bool"),
+@pytest.mark.parametrize("raw", [
+    '"hold"',            # a bare string
+    '42',                # a number
+    'null',
+    'true',
+    '[]',                # empty list
+    '[1, 2, 3]',         # a list with no object in it
+    'not json at all',   # no object to find
+    '',                  # empty
 ])
-def test_validate_rejects_a_non_object_answer(raw, kind):
-    """The brain once answered with a JSON LIST. json.loads() happily returned it, and
-    validate() then called .get() on a list -> AttributeError, which is NOT an
-    AdvisorError, so it escaped run_sleeve and took the WHOLE cycle down (#63).
-    Every non-object shape must fail as an AdvisorError = a safe HOLD."""
-    with pytest.raises(advisor.AdvisorError) as ei:
+def test_validate_holds_on_a_non_object_answer(raw):
+    """The brain once answered with a shape that was not a decision object; validate()
+    then called .get() on it -> AttributeError, which is NOT an AdvisorError, so it
+    escaped run_sleeve and took the WHOLE cycle down (#63). Anything from which no
+    decision object can be recovered must fail as an AdvisorError = a safe HOLD."""
+    with pytest.raises(advisor.AdvisorError):
         advisor.validate(raw)
-    assert "expected a JSON object" in str(ei.value)
-    assert kind in str(ei.value)
+
+
+# --- #81: recover a decision from near-JSON shapes the model occasionally emits ---
+
+def test_validate_unwraps_a_list_wrapped_object():
+    """The model sometimes wraps the object in a one-element list: [ {…} ]. That is a
+    formatting quirk, not a reason to discard a real decision — unwrap and use it."""
+    d = advisor.validate('[{"action": "hold", "pair": null, "fraction": null,'
+                          ' "confidence": 0.9, "reasoning": "wait"}]')
+    assert d["action"] == "hold" and d["confidence"] == 0.9
+
+
+def test_validate_ignores_trailing_junk_after_the_object():
+    """A valid object followed by a stray extra '}' (or any trailing text) — take the
+    first balanced object and ignore the rest (#81, 'Extra data')."""
+    d = advisor.validate('{"action": "hold", "pair": null, "fraction": null,'
+                         ' "confidence": 0.8, "reasoning": "hold"}\n}')
+    assert d["action"] == "hold"
+
+
+def test_validate_repairs_a_truncated_object():
+    """The response was cut off at the token cap right after the last field, so the
+    closing brace is missing (#81, 'Expecting , delimiter' at EOF). Close it and use
+    the decision rather than throwing it away."""
+    truncated = ('{"action": "hold", "pair": null, "fraction": null,'
+                 ' "confidence": 0.8, "reasoning": "still within the target window"')
+    d = advisor.validate(truncated)
+    assert d["action"] == "hold" and d["confidence"] == 0.8
+
+
+def test_validate_repairs_a_truncation_inside_the_reasoning_string():
+    """Harder truncation: cut off mid-string. Closing the open string + brace still
+    yields a usable (if clipped) decision — the action/confidence are already in."""
+    truncated = ('{"action": "hold", "pair": null, "fraction": null,'
+                 ' "confidence": 0.7, "reasoning": "the position is marginally in pro')
+    d = advisor.validate(truncated)
+    assert d["action"] == "hold" and d["confidence"] == 0.7
+
+
+def test_validate_still_holds_when_truncation_left_no_usable_object():
+    """A truncation that lands mid-number can't be repaired into valid JSON — must
+    still HOLD, never crash."""
+    with pytest.raises(advisor.AdvisorError):
+        advisor.validate('{"action": "hold", "confidence": 0.')
 
 
 def test_validate_still_accepts_a_fenced_object():

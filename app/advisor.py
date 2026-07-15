@@ -255,11 +255,74 @@ def _strip_fences(text: str) -> str:
     return m.group(1).strip() if m else t
 
 
+def _first_object(text: str) -> dict | None:
+    """Extract the first balanced {…} object from arbitrary text, repairing a
+    truncation at the end (a response cut off at the token cap) by closing an
+    open string and appending the missing brace(s). Returns None if nothing
+    parseable can be recovered."""
+    start = text.find("{")
+    if start < 0:
+        return None
+    depth, in_str, esc = 0, False, False
+    for i in range(start, len(text)):
+        c = text[i]
+        if in_str:
+            if esc:
+                esc = False
+            elif c == "\\":
+                esc = True
+            elif c == '"':
+                in_str = False
+            continue
+        if c == '"':
+            in_str = True
+        elif c == "{":
+            depth += 1
+        elif c == "}":
+            depth -= 1
+            if depth == 0:                       # a complete object: ignore any trailing junk
+                try:
+                    v = json.loads(text[start:i + 1])
+                except json.JSONDecodeError:
+                    return None
+                return v if isinstance(v, dict) else None
+    # ran off the end still inside the object -> truncated; try a bounded repair
+    frag = text[start:] + ('"' if in_str else "") + "}" * depth
+    try:
+        v = json.loads(frag)
+    except json.JSONDecodeError:
+        return None
+    return v if isinstance(v, dict) else None
+
+
+def _coerce_object(raw: str) -> dict:
+    """Recover the decision object from a response that is *almost* JSON: a clean
+    object, a one-element list wrapper, an object trailed by junk, or one cut off
+    at the closing brace. Anything unrecoverable raises AdvisorError -> HOLD."""
+    text = _strip_fences(raw)
+    try:
+        d = json.loads(text)
+    except json.JSONDecodeError:
+        d = None
+    if isinstance(d, dict):
+        return d
+    if isinstance(d, list):                      # some models wrap the object in a list
+        for item in d:
+            if isinstance(item, dict):
+                return item
+        raise AdvisorError("list contained no JSON object")
+    obj = _first_object(text)                    # prose-wrapped / trailing junk / truncated
+    if obj is None:
+        raise AdvisorError(f"unparseable response: {text[:80]!r}")
+    return obj
+
+
 def _call_gemini(key: str, model: str, prompt: str, http: httpx.Client) -> str:
     r = http.post(
         GEMINI_API.format(model=model), params={"key": key},
         json={"contents": [{"parts": [{"text": prompt}]}],
-              "generationConfig": {"temperature": 0.2, "responseMimeType": "application/json"}})
+              "generationConfig": {"temperature": 0.2, "responseMimeType": "application/json",
+                                   "maxOutputTokens": 2048}})
     r.raise_for_status()
     return r.json()["candidates"][0]["content"]["parts"][0]["text"]
 
@@ -399,15 +462,12 @@ def ask(prompt: str, http: httpx.Client | None = None,
 
 def validate(raw: str) -> dict:
     """Parse + validate the model's answer. Raises AdvisorError -> HOLD."""
-    try:
-        d = json.loads(raw)
-    except json.JSONDecodeError as e:
-        raise AdvisorError(f"unparseable response: {e}") from e
-    # Parseable is not the same as usable: a list, a bare string, a number and null
-    # all survive json.loads. Reaching .get() on those raises AttributeError, which
-    # is NOT an AdvisorError -- so it escapes run_sleeve and kills the whole cycle.
-    if not isinstance(d, dict):
-        raise AdvisorError(f"expected a JSON object, got {type(d).__name__}")
+    # Be tolerant of the near-JSON shapes models occasionally emit (list wrapper,
+    # trailing junk, a truncated tail) — recover the object or HOLD. A bare string,
+    # number or null is not a decision and still raises AdvisorError (-> HOLD),
+    # rather than reaching .get() and throwing an AttributeError that would escape
+    # run_sleeve and kill the whole cycle.
+    d = _coerce_object(raw)
     action = str(d.get("action", "")).lower()
     if action not in ("buy", "sell", "hold"):
         raise AdvisorError(f"invalid action {d.get('action')!r}")
