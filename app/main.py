@@ -1079,20 +1079,29 @@ async function load(){
     retryWhen = soon ? `retrying ${inTxt}` : `retrying at next decision · ${inTxt}`;
   }
   const FAIL = new Set(['error', 'invalid', 'no_key']);
+  // decisions arrive newest-first, so the FIRST row we see for a sleeve is its latest.
+  // A transient failure only says "retrying" while it is that latest row — once the
+  // sleeve has decided again, the old failed row is history and must not claim a retry
+  // is pending (it was already recovered ~10 min later by the retry timer, #80).
+  const latestIdx = {};
+  s.decisions.forEach((d, i) => { if (latestIdx[d.sleeve] === undefined) latestIdx[d.sleeve] = i; });
   document.getElementById('log').innerHTML =
     '<thead><tr><th>When</th><th>Sleeve</th><th>Decision</th><th>Why</th></tr></thead><tbody>' +
     (s.decisions.length ? '' : '<tr><td class="dim" colspan="4">no decisions in the last 24 hours</td></tr>') +
-    s.decisions.map(d => {
+    s.decisions.map((d, i) => {
       const failed = FAIL.has(d.status);
-      const cls = d.status==='executed' ? d.action : d.status==='held' ? 'hold'
-      : (failed && (d.failure||{}).permanent) ? 'err' : 'dim';
       const f = d.failure || {};
-      // a permanent failure must NOT be dressed up as a hiccup that will retry away
-      const what = failed ? (f.permanent ? '⛔ FAILED' : '⏳ RETRY')
+      const pendingRetry = failed && !f.permanent && latestIdx[d.sleeve] === i;
+      const cls = d.status==='executed' ? d.action : d.status==='held' ? 'hold'
+      : (failed && f.permanent) ? 'err' : 'dim';
+      // a permanent failure must NOT be dressed up as a hiccup that will retry away; and a
+      // superseded transient failure shows just its status, not a forward-looking ⏳ RETRY
+      const what = failed
+        ? (f.permanent ? '⛔ FAILED' : pendingRetry ? '⏳ RETRY' : d.status.toUpperCase())
         : (d.status==='held' ? 'HOLD' : (d.action||d.status).toUpperCase()) +
           (d.pair ? ' ' + d.pair : '') + (d.fraction ? ' ' + (d.fraction*100).toFixed(0)+'%' : '');
       const why = failed
-        ? (f.text || 'the decision failed') + (f.permanent ? '' : ` · ${retryWhen}`)
+        ? (f.text || 'the decision failed') + (pendingRetry ? ` · ${retryWhen}` : '')
         : (d.reasoning || d.detail || '');
       return `<tr><td class="when">${fmtWhen(d.at)}</td><td class="slv">${d.sleeve||''}</td>` +
         `<td class="act ${cls}">${what}</td><td class="why">${why}</td></tr>`;
