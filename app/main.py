@@ -869,12 +869,16 @@ async function load(){
   document.getElementById('sleeves').innerHTML = s.overview.sleeves.map(v => {
     const d = v.total_eur - v.allocated;
     const assets = Object.keys(v.holdings).filter(k => k !== CCODE && k !== 'dust');
+    // cash is shown on every card, €0.00 included — a sleeve with a position AND
+    // idle cash must not read as fully deployed (#84)
+    const cash = `${CCY}${(v.holdings[CCODE] || 0).toFixed(2)}`;
     return `<div class="card sleeve">` +
       `<div class="top"><span class="eyebrow" style="margin:0">${v.sleeve}</span>` +
       `<span class="badge ${d >= 0 ? 'up' : 'down'}">${d >= 0 ? '+' : '−'}${CCY}${Math.abs(d).toFixed(2)}</span></div>` +
       `<div class="val">${CCY}${v.total_eur.toFixed(2)}</div>` +
       `<div class="desc">${assets.length
-        ? `holding <b style="color:#c7cede">${assets.join(', ')}</b>` : 'in cash'}</div></div>`;
+        ? `holding <b style="color:#c7cede">${assets.join(', ')}</b> · ${cash} cash`
+        : `in cash ${cash}`}</div></div>`;
   }).join('');
   // hero: P/L on invested + the vs-hodl sentence (#9)
   const invested = s.overview.sleeves.reduce((a, v) => a + (v.allocated || 0), 0);
