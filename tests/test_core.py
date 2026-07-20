@@ -393,17 +393,23 @@ def test_paper_mirrors_krakens_fee_convention(monkeypatch):
     monkeypatch.setattr(portfolio, "min_order_eur", lambda pair: 1.0)
     monkeypatch.setattr(market, "touch", lambda pair: {"bid": 100.0, "ask": 100.0, "last": 100.0})
     try:
+        rate = market.fees("BTC/EUR")
         before = portfolio.holdings(conn, "paper", "swing")["EUR"]
+        budget = before * 0.5
         out = portfolio.execute(conn, "paper", "swing", 1, "buy", "BTC/EUR", 0.5,
                                 {"BTC/EUR": 100.0})
         after = portfolio.holdings(conn, "paper", "swing")
         spent = before - after["EUR"]
-        assert round(spent, 6) == round(before * 0.5, 6)          # exactly the budget, no more
         # coins bought + the fee charged on top == the cash that left (out["fee_eur"] is
         # rounded for display, so check against the real arithmetic, not the display value)
         cost = after["BTC"] * 100.0
-        assert round(cost * (1 + config.MAKER_FEE), 6) == round(spent, 6)
-        assert out["fee_eur"] == round(cost * config.MAKER_FEE, 2)
+        assert round(cost * (1 + rate["maker"]), 6) == round(spent, 6)
+        assert out["fee_eur"] == round(cost * rate["maker"], 2)
+        # Never more than the budget: headroom is reserved at the TAKER rate because the
+        # fill can always fall back to a market order. A maker fill therefore leaves the
+        # difference between the two rates behind as idle cash rather than overdrawing (#85).
+        assert spent <= budget
+        assert round(budget - spent, 6) == round(cost * (rate["taker"] - rate["maker"]), 6)
     finally:
         conn.close(); os.unlink(p)
 
@@ -949,5 +955,88 @@ def test_the_failing_silently_alert_re_alerts(monkeypatch):
             engine._track_cycle_outcome(conn, [{"sleeve": "swing", "status": "error"}],
                                         crashed=False)
         assert len(sent) == 2, "must re-alert, not fire exactly once"
+    finally:
+        conn.close(); os.unlink(p)
+
+
+def test_fee_schedule_comes_from_the_exchange_not_static_metadata(monkeypatch):
+    """ccxt's static Kraken fees describe a mid-tier account (0.25/0.40). The real
+    bottom-tier schedule is double that, and sizing against the wrong one leaves too
+    little cash for the fee, rejecting the order (#85)."""
+    market._fees.clear()
+    monkeypatch.setattr(config, "KRAKEN_API_KEY", "k")
+    monkeypatch.setattr(config, "KRAKEN_API_SECRET", "s")
+
+    class FakeEx:
+        calls = 0
+        markets = {"BTC/EUR": {"id": "XXBTZEUR"}}
+        def market(self, pair):
+            return {"id": "XXBTZEUR"}
+        def private_post_tradevolume(self, params):
+            FakeEx.calls += 1
+            return {"result": {"fees": {"XXBTZEUR": {"fee": "0.8000"}},
+                               "fees_maker": {"XXBTZEUR": {"fee": "0.4000"}}}}
+    monkeypatch.setattr(market, "exchange", FakeEx)
+    try:
+        got = market.fees("BTC/EUR")
+        assert got["taker"] == 0.008 and got["maker"] == 0.004   # percent -> rate
+        assert got["source"] == "exchange"
+        market.fees("BTC/EUR")
+        assert FakeEx.calls == 1, "the schedule must be cached, not re-queried per call"
+    finally:
+        market._fees.clear()
+
+
+def test_fee_lookup_failure_never_stops_a_trade(monkeypatch):
+    """A dead fee endpoint must fall back to the defaults, not raise into the cycle."""
+    market._fees.clear()
+    monkeypatch.setattr(config, "KRAKEN_API_KEY", "k")
+    monkeypatch.setattr(config, "KRAKEN_API_SECRET", "s")
+
+    class DeadEx:
+        def market(self, pair):
+            raise RuntimeError("exchange down")
+        def private_post_tradevolume(self, params):
+            raise RuntimeError("exchange down")
+    monkeypatch.setattr(market, "exchange", DeadEx)
+    try:
+        got = market.fees("BTC/EUR")
+        assert got == {"maker": config.MAKER_FEE, "taker": config.TAKER_FEE, "source": "default"}
+    finally:
+        market._fees.clear()
+
+
+def test_defaults_are_the_bottom_tier_rates():
+    """A fresh clone places its first order before any fee query has run. If the
+    built-in default is the optimistic mid-tier rate, that first order is rejected."""
+    assert config.TAKER_FEE >= 0.008 and config.MAKER_FEE >= 0.004
+
+
+def test_an_overdrawn_sleeve_says_so_instead_of_being_floored(monkeypatch):
+    """Sleeves are virtual books over one real account, so an overspend is not stopped
+    by the exchange -- it silently borrows from a neighbour and rejects a LATER sleeve.
+    Flooring at zero would be worse: the books would stop matching the real balance and
+    the gap would launder into the next reconcile as drift (#85)."""
+    conn, p = make_db()
+    try:
+        sent = []
+        monkeypatch.setattr(portfolio.ha, "notify", lambda t, m: sent.append(t))
+        portfolio._set_cash(conn, "live", "swing", -0.18)
+        assert portfolio.holdings(conn, "live", "swing")["EUR"] == -0.18, "must book the truth"
+        assert sent, "an overdrawn sleeve must announce itself, not sit silently negative"
+    finally:
+        conn.close(); os.unlink(p)
+
+
+def test_a_negative_cash_balance_is_visible_not_rendered_as_zero():
+    """The holdings filter used to be `amount > 1e-12`, which dropped an overdrawn
+    sleeve's row entirely -- every caller's .get(EUR, 0.0) then read the debt as "no
+    cash". A sleeve that owes money must not look like one that merely has none (#85)."""
+    conn, p = make_db()
+    try:
+        portfolio._set(conn, "live", "swing", "EUR", -0.18)
+        assert portfolio.holdings(conn, "live", "swing").get("EUR") == -0.18
+        portfolio._set(conn, "live", "swing", "EUR", 1e-15)   # rounded to nothing: still dropped
+        assert "EUR" not in portfolio.holdings(conn, "live", "swing")
     finally:
         conn.close(); os.unlink(p)

@@ -86,6 +86,54 @@ def touch(pair: str) -> dict:
             "spread_pct": round((ask - bid) / ask * 100, 4) if ask else None}
 
 
+_fees: dict[str, dict] = {}
+
+
+def _kraken_pair(pair: str) -> str:
+    """Kraken's own name for a pair, e.g. BTC/EUR -> XXBTZEUR. Its fee endpoint
+    keys results by that name, not by the ccxt symbol."""
+    ex = exchange()
+    if not ex.markets:
+        ex.load_markets()     # the fee lookup can run before anything else has loaded them
+    return ex.market(pair).get("id") or pair.replace("/", "")
+
+
+def fees(pair: str) -> dict:
+    """The maker/taker rates the exchange will ACTUALLY charge for this pair.
+
+    ccxt reports Kraken's fees from static metadata that describes a mid-tier
+    account. The real schedule is volume-tiered and the bottom tier — where any
+    small portfolio lives — is twice what that metadata claims: 0.40% maker and
+    0.80% taker rather than 0.25%/0.40%. Sizing a buy against the wrong number
+    leaves too little cash for the fee and the order is rejected outright (#85).
+
+    Cached per pair: the rate only moves when 30-day volume crosses a tier
+    boundary, which is not a per-cycle event. Falls back to the configured
+    defaults on any failure — a fee lookup must never be what stops a trade.
+    """
+    if pair in _fees:
+        return _fees[pair]
+    fallback = {"maker": config.MAKER_FEE, "taker": config.TAKER_FEE, "source": "default"}
+    if not (config.KRAKEN_API_KEY and config.KRAKEN_API_SECRET):
+        return fallback           # TradeVolume is a private endpoint; paper mode has no key
+    try:
+        name = _kraken_pair(pair)
+        r = exchange().private_post_tradevolume({"pair": name})["result"]
+        taker = r.get("fees", {}).get(name, {}).get("fee")
+        maker = r.get("fees_maker", {}).get(name, {}).get("fee")
+        if taker is None or maker is None:
+            return fallback
+        # Kraken quotes these as percentages ("0.8000"), not as rates.
+        got = {"maker": float(maker) / 100, "taker": float(taker) / 100, "source": "exchange"}
+        _fees[pair] = got
+        LOGGER.info("fee schedule %s: maker %.3f%% taker %.3f%%",
+                    pair, got["maker"] * 100, got["taker"] * 100)
+        return got
+    except Exception as e:  # noqa: BLE001 - never let a fee lookup fail a cycle
+        LOGGER.warning("fee schedule for %s unavailable, using defaults: %s", pair, e)
+        return fallback
+
+
 def fear_greed() -> dict | None:
     """Crypto Fear & Greed index (alternative.me, free). None on any failure."""
     try:

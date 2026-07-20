@@ -9,7 +9,7 @@ import json
 import logging
 from datetime import datetime, timezone
 
-from . import config, db, market, sleeves, stops
+from . import config, db, ha, market, sleeves, stops
 
 LOGGER = logging.getLogger(__name__)
 TOPUP_EPSILON_EUR = 1.0  # ignore dust/fee drift below this when detecting deposits
@@ -21,8 +21,13 @@ def _now() -> str:
 
 
 def holdings(conn, mode: str, sleeve: str) -> dict[str, float]:
+    """The filter drops rows that have rounded to nothing, but it must keep NEGATIVE
+    ones. `amount > 1e-12` hid an overdrawn sleeve completely: the row vanished, every
+    caller's `.get(EUR, 0.0)` returned zero, and a debt was displayed as "no cash" —
+    the same failure shape as a bot that cannot act being rendered as one that chose
+    not to. An overdraft has to be visible to be fixed (#85)."""
     return {r["asset"]: r["amount"] for r in conn.execute(
-        "SELECT asset, amount FROM holdings WHERE mode=? AND sleeve=? AND amount > 1e-12",
+        "SELECT asset, amount FROM holdings WHERE mode=? AND sleeve=? AND abs(amount) > 1e-12",
         (mode, sleeve))}
 
 
@@ -30,6 +35,29 @@ def _set(conn, mode: str, sleeve: str, asset: str, amount: float) -> None:
     conn.execute("INSERT INTO holdings(mode, sleeve, asset, amount) VALUES(?,?,?,?) "
                  "ON CONFLICT(mode, sleeve, asset) DO UPDATE SET amount=excluded.amount",
                  (mode, sleeve, asset, amount))
+
+
+def _set_cash(conn, mode: str, sleeve: str, amount: float) -> None:
+    """Write a sleeve's cash, refusing to do it quietly if it has gone negative.
+
+    Sleeves are virtual books over ONE real account, so a sleeve that overspends
+    is not stopped by the exchange — it silently borrows from its neighbours, and
+    the rejection lands on whichever OTHER sleeve next tries to deploy its full
+    balance. That is a long way from the cause, and the books look fine meanwhile.
+
+    Flooring the number at zero would be worse than the overdraft: the books
+    would stop matching the real balance and the difference would be laundered
+    into the next reconcile as drift. So book the truth and make noise (#85).
+    """
+    if amount < 0:
+        LOGGER.error("sleeve %s/%s cash is NEGATIVE (%.4f) — it has overspent into "
+                     "another sleeve's money", mode, sleeve, amount)
+        if mode == "live":
+            ha.notify("Magpie: sleeve overdrawn",
+                      f"{sleeve} cash is {config.symbol()}{amount:.4f}. It has spent money "
+                      f"belonging to another sleeve; the next sleeve to deploy its full "
+                      f"balance will be rejected for insufficient funds.")
+    _set(conn, mode, sleeve, config.BASE_CURRENCY, amount)
 
 
 def valued(conn, mode: str, sleeve: str, prices: dict[str, float]) -> dict:
@@ -212,8 +240,16 @@ def execute(conn, mode: str, sleeve: str, decision_id: int, action: str, pair: s
         spend = cash * fraction                      # the total this sleeve is willing to part with
         if spend < min_order_eur(pair):
             raise ValueError(f"buy of {config.symbol()}{spend:.2f} is under the {config.symbol()}{min_order_eur(pair):.0f} exchange minimum")
-        # size so that cost + fee == spend, because the fee is charged on top
-        amount = spend / (price * (1 + config.MAKER_FEE))
+        # Size so that cost + fee == spend, because the fee is charged on top.
+        # Reserve headroom at the TAKER rate, not the maker one: a buy aims for a
+        # post-only limit but falls back to a market order after LIMIT_FILL_WAIT_S,
+        # so taker is the worst case every buy can actually incur. Reserving the
+        # maker rate and then taking a taker fill overspends the sleeve's cash,
+        # which is drawn from the shared account and rejects a LATER sleeve's
+        # order rather than this one (#85). Under-spending by the difference on a
+        # maker fill just leaves a few cents idle — the safe direction to be wrong.
+        rate = market.fees(pair)
+        amount = spend / (price * (1 + rate["taker"]))
         if mode == "live":
             f = _live_fill(pair, "buy", amount, price, conn, decision_id, mode, sleeve)
             exchange_id = f["id"]
@@ -223,11 +259,13 @@ def execute(conn, mode: str, sleeve: str, decision_id: int, action: str, pair: s
             spend = f["cost"] + fee                  # what actually left it
         else:
             exchange_id = None
-            fee = amount * price * config.MAKER_FEE
+            # the same rate the live bot pays — an arm trading on a cheaper fee
+            # than the bot it is measured against is not a control (#85)
+            fee = amount * price * rate["maker"]
             spend = amount * price + fee
         if amount <= 0:
             raise ValueError(f"buy of {pair} filled nothing")
-        _set(conn, mode, sleeve, config.BASE_CURRENCY, cash - spend)
+        _set_cash(conn, mode, sleeve, cash - spend)
         _set(conn, mode, sleeve, asset, h.get(asset, 0.0) + amount)
     elif action == "sell":
         # clear this sleeve's resting stops on this pair FIRST. The sleeves are
@@ -265,10 +303,9 @@ def execute(conn, mode: str, sleeve: str, decision_id: int, action: str, pair: s
                 proceeds = f["cost"]                     # gross quote received
             else:
                 exchange_id = None
-                fee = proceeds * config.MAKER_FEE
+                fee = proceeds * market.fees(pair)["maker"]   # real rate, same as live (#85)
             _set(conn, mode, sleeve, asset, held - amount)
-            _set(conn, mode, sleeve, config.BASE_CURRENCY,
-                 h.get(config.BASE_CURRENCY, 0.0) + proceeds - fee)
+            _set_cash(conn, mode, sleeve, h.get(config.BASE_CURRENCY, 0.0) + proceeds - fee)
             # a PARTIAL sell leaves coins behind. Their stop was just cancelled, so put a
             # floor back under them at the original trigger — otherwise the remainder rides
             # naked and nobody notices (#35).

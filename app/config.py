@@ -104,8 +104,12 @@ def tz():
 
 START_BALANCE_EUR = float(os.environ.get("START_BALANCE_EUR", "50"))
 SKIM_FRACTION = float(os.environ.get("SKIM_FRACTION", "0.5"))  # share of new profit skimmed to the vault
-TAKER_FEE = float(os.environ.get("TAKER_FEE", "0.004"))   # market-order fee (fallback fills)
-MAKER_FEE = float(os.environ.get("MAKER_FEE", "0.0025"))  # post-only limit fee (preferred fills)
+# Kraken's BOTTOM volume tier — what a small portfolio actually pays. ccxt's static
+# metadata claims 0.40/0.25, which describes a mid-tier account and is half the real
+# rate; sizing against it leaves too little cash for the fee (#85). These are only the
+# fallback: market.fees() asks the exchange for the live schedule.
+TAKER_FEE = float(os.environ.get("TAKER_FEE", "0.008"))   # market-order fee (fallback fills)
+MAKER_FEE = float(os.environ.get("MAKER_FEE", "0.004"))   # post-only limit fee (preferred fills)
 LIMIT_FILL_WAIT_S = int(os.environ.get("LIMIT_FILL_WAIT_S", "90"))  # patience before falling back to market
 
 # backups of the ledger. The DB is the audit trail — every prompt, decision, order
