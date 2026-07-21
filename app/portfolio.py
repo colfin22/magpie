@@ -168,11 +168,18 @@ def _clear_inflight(conn, decision_id: int) -> None:
 
 
 def _live_fill(pair: str, side: str, amount: float, limit_price: float,
-               conn=None, decision_id: int = 0, mode: str = "live", sleeve: str = "") -> dict:
+               conn=None, decision_id: int = 0, mode: str = "live", sleeve: str = "",
+               budget: float | None = None) -> dict:
     """Place a post-only limit at the touch; fall back to market if unfilled.
 
     Maker fills save ~0.15% per side over market orders — free money on every
     patient fill. Returns the SETTLED truth from the exchange, not an estimate.
+
+    For BUYS, `budget` is the total quote the sleeve may part with (cost + fee).
+    The market fallback is placed BY COST where the exchange supports it, so a
+    price that moved during the maker wait changes the coins received — never
+    the cash spent. Sizing by amount at a stale price overdrew the sleeve by
+    the slippage whenever the fallback fired (#87).
 
     Every order id is persisted the moment it is created, so a crash mid-fill
     leaves a trail to recover from (#40).
@@ -180,6 +187,15 @@ def _live_fill(pair: str, side: str, amount: float, limit_price: float,
     import time as _t
     ex = market.exchange()
     ids: list[str] = []
+
+    def market_buy(budget_left, fallback_amount: float):
+        """Market order for the remaining budget — by cost when supported."""
+        if budget_left is not None and getattr(ex, "has", {}).get("createMarketBuyOrderWithCost"):
+            spend_cost = budget_left / (1 + market.fees(pair)["taker"])   # fee goes on top
+            if spend_cost <= 0:
+                return None
+            return ex.create_market_buy_order_with_cost(pair, spend_cost)
+        return ex.create_order(pair, "market", "buy", fallback_amount)
 
     def note(o):
         oid = o.get("id")
@@ -194,7 +210,9 @@ def _live_fill(pair: str, side: str, amount: float, limit_price: float,
         note(o)
     except Exception as e:  # noqa: BLE001 - post-only rejected (would cross) -> just take
         LOGGER.info("post-only rejected (%s) — going to market", e)
-        o = ex.create_order(pair, "market", side, amount)
+        o = market_buy(budget, amount) if side == "buy" else ex.create_order(pair, "market", side, amount)
+        if o is None:
+            return {"id": None, **_settle(ex, pair, ids)}
         note(o)
         return {"id": o.get("id"), **_settle(ex, pair, ids)}
 
@@ -215,7 +233,15 @@ def _live_fill(pair: str, side: str, amount: float, limit_price: float,
     remainder = amount - filled
     LOGGER.info("limit unfilled after %ss (%.6f of %.6f) — market for the rest",
                 config.LIMIT_FILL_WAIT_S, filled, amount)
-    o2 = ex.create_order(pair, "market", side, remainder)
+    if side == "buy":
+        # spend only what's LEFT of the budget after the partial maker fill
+        part = _settle(ex, pair, ids)
+        left = (budget - part["cost"] - part["fee_quote"]) if budget is not None else None
+        o2 = market_buy(left, remainder)
+        if o2 is None:
+            return {"id": ids[0], **part}
+    else:
+        o2 = ex.create_order(pair, "market", side, remainder)
     note(o2)
     return {"id": o2.get("id"), **_settle(ex, pair, ids)}   # blended across both fills
 
@@ -251,7 +277,8 @@ def execute(conn, mode: str, sleeve: str, decision_id: int, action: str, pair: s
         rate = market.fees(pair)
         amount = spend / (price * (1 + rate["taker"]))
         if mode == "live":
-            f = _live_fill(pair, "buy", amount, price, conn, decision_id, mode, sleeve)
+            f = _live_fill(pair, "buy", amount, price, conn, decision_id, mode, sleeve,
+                           budget=spend)
             exchange_id = f["id"]
             amount = f["filled"] - f["fee_base"]     # what actually landed in the account
             price = f["price"] or price

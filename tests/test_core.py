@@ -1040,3 +1040,108 @@ def test_a_negative_cash_balance_is_visible_not_rendered_as_zero():
         assert "EUR" not in portfolio.holdings(conn, "live", "swing")
     finally:
         conn.close(); os.unlink(p)
+
+
+# --- #87: market fallback buys by COST so slippage can't overdraw the sleeve ---
+
+class _CostFillEx:
+    """Post-only always rejected; market-by-cost fills at a WORSE price than the
+    sizing price — the exact shape that overdrew a sleeve when sized by amount."""
+    has = {"createMarketBuyOrderWithCost": True}
+    def __init__(self, fill_price):
+        self.fill_price = fill_price
+        self.cost_orders = []
+        self.orders = {}
+    def create_order(self, pair, typ, side, amount, price=None, params=None):
+        if typ == "limit":
+            raise RuntimeError("EOrder:Post only order")
+        raise AssertionError("amount-based market order must not be used when cost is supported")
+    def create_market_buy_order_with_cost(self, pair, cost, params=None):
+        self.cost_orders.append(cost)
+        oid = f"C{len(self.cost_orders)}"
+        filled = cost / self.fill_price
+        self.orders[oid] = {"id": oid, "status": "closed", "filled": filled,
+                            "cost": cost, "average": self.fill_price,
+                            "fee": {"cost": cost * 0.008, "currency": "EUR"}}
+        return {"id": oid}
+    def fetch_order(self, oid, pair):
+        return self.orders[oid]
+
+
+def test_market_fallback_spends_the_budget_not_the_stale_amount(monkeypatch):
+    """Sizing price 100, fill price 103 (+3% during the wait): an amount-based
+    fallback would overspend by ~3%; a cost-based one spends exactly the budget."""
+    from app import portfolio
+    ex = _CostFillEx(fill_price=103.0)
+    monkeypatch.setattr(market, "exchange", lambda: ex)
+    monkeypatch.setattr(market, "fees", lambda pair: {"maker": 0.004, "taker": 0.008, "source": "t"})
+    budget = 32.4596
+    f = portfolio._live_fill("BTC/EUR", "buy", budget / (100.0 * 1.008), 100.0, budget=budget)
+    spent = f["cost"] + f["fee_quote"]
+    assert abs(spent - budget) < 1e-6, f"spent {spent} != budget {budget}"
+    assert ex.cost_orders and abs(ex.cost_orders[0] - budget / 1.008) < 1e-9
+
+
+def test_market_fallback_without_cost_support_uses_the_amount(monkeypatch):
+    """An exchange without cost-based buys keeps the old amount-based behaviour."""
+    from app import portfolio
+
+    class PlainEx:
+        has = {}
+        def __init__(self):
+            self.market_amounts = []
+            self.orders = {}
+        def create_order(self, pair, typ, side, amount, price=None, params=None):
+            if typ == "limit":
+                raise RuntimeError("EOrder:Post only order")
+            self.market_amounts.append(amount)
+            self.orders["M1"] = {"id": "M1", "status": "closed", "filled": amount,
+                                 "cost": amount * 100.0,
+                                 "fee": {"cost": amount * 100.0 * 0.008, "currency": "EUR"}}
+            return {"id": "M1"}
+        def fetch_order(self, oid, pair):
+            return self.orders[oid]
+
+    ex = PlainEx()
+    monkeypatch.setattr(market, "exchange", lambda: ex)
+    f = portfolio._live_fill("BTC/EUR", "buy", 0.5, 100.0, budget=51.0)
+    assert ex.market_amounts == [0.5]
+    assert f["filled"] == 0.5
+
+
+def test_partial_maker_fill_markets_only_whats_left_of_the_budget(monkeypatch):
+    """Limit fills half as maker, times out; the market leg must spend only the
+    REMAINING budget (after the partial fill's cost+fee), not re-spend it all."""
+    from app import portfolio
+
+    class HalfFillEx:
+        has = {"createMarketBuyOrderWithCost": True}
+        def __init__(self):
+            self.cost_orders = []
+            self.orders = {"L1": {"id": "L1", "status": "open", "filled": 0.16,
+                                  "cost": 16.0, "average": 100.0,
+                                  "fee": {"cost": 0.064, "currency": "EUR"}}}
+        def create_order(self, pair, typ, side, amount, price=None, params=None):
+            assert typ == "limit"
+            return {"id": "L1"}
+        def cancel_order(self, oid, pair):
+            pass
+        def create_market_buy_order_with_cost(self, pair, cost, params=None):
+            self.cost_orders.append(cost)
+            self.orders["C1"] = {"id": "C1", "status": "closed", "filled": cost / 104.0,
+                                 "cost": cost, "average": 104.0,
+                                 "fee": {"cost": cost * 0.008, "currency": "EUR"}}
+            return {"id": "C1"}
+        def fetch_order(self, oid, pair):
+            return self.orders[oid]
+
+    ex = HalfFillEx()
+    monkeypatch.setattr(market, "exchange", lambda: ex)
+    monkeypatch.setattr(market, "fees", lambda pair: {"maker": 0.004, "taker": 0.008, "source": "t"})
+    monkeypatch.setattr(config, "LIMIT_FILL_WAIT_S", 0)
+    budget = 32.4596
+    f = portfolio._live_fill("BTC/EUR", "buy", 0.32, 100.0, budget=budget)
+    left = budget - 16.0 - 0.064
+    assert ex.cost_orders and abs(ex.cost_orders[0] - left / 1.008) < 1e-9
+    spent = f["cost"] + f["fee_quote"]
+    assert spent <= budget + 1e-9, f"blended spend {spent} exceeded budget {budget}"
