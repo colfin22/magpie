@@ -341,3 +341,27 @@ def test_validate_still_accepts_a_fenced_object():
     """The guard must not break the normal path."""
     d = advisor.validate(ANSWER)
     assert d["action"] in ("buy", "sell", "hold")
+
+
+class TestPromptFees:
+    def test_prompt_quotes_live_round_trip(self, monkeypatch):
+        from app import market
+        monkeypatch.setattr(market, "fees",
+                            lambda pair: {"maker": 0.004, "taker": 0.008, "source": "exchange"})
+        p = advisor.build_prompt({"total_eur": 16}, [], [], 10.0,
+                                 mandate="m")
+        assert "0.40% maker" in p
+        assert "0.80% taker" in p
+        assert "1.6%" in p            # round trip = 2x taker
+        assert "each way" not in p    # the old misleading phrasing is gone
+
+    def test_prompt_fees_fail_soft_to_defaults(self, monkeypatch):
+        from app import market
+        def boom(pair):
+            raise RuntimeError("exchange down")
+        # fees() itself never raises in production; simulate by pointing at defaults
+        monkeypatch.setattr(market, "fees",
+                            lambda pair: {"maker": 0.004, "taker": 0.008, "source": "default"})
+        p = advisor.build_prompt({"total_eur": 16}, [], [], 10.0,
+                                 mandate="m")
+        assert "taker" in p

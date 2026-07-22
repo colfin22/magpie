@@ -42,7 +42,9 @@ PROMPT = """You are the autonomous manager of ONE strategy sleeve of a small
 cryptocurrency spot portfolio on Kraken. You decide at scheduled intervals; between
 decisions the sleeve is untouched. Your objective is to grow this sleeve's {ccy} value.
 There is no human oversight of individual decisions — be deliberate, and remember
-every trade costs ~{fee_pct:.2f}% in fees each way. HOLD is a perfectly good decision.
+fees are ~{maker_pct:.2f}% maker / ~{taker_pct:.2f}% taker per side, so a full
+round trip can cost up to ~{roundtrip_pct:.1f}% — a position must gain more than
+that before it makes a cent. HOLD is a perfectly good decision.
 
 {mandate}
 {lessons}
@@ -120,10 +122,19 @@ def build_prompt(portfolio: dict, market_data: list[dict], history: list[dict],
     if lessons:
         lessons_block = ("\nLessons from your own past performance (a monthly "
                          "self-review — weigh them):\n" + lessons + "\n")
+    # The real schedule, read from the exchange (falls back to config defaults).
+    # Quoting the worst case — taker both ways — because a buy can always fall
+    # back to a market order; the bot judged moves against a hurdle roughly a
+    # third of the true one for its first two weeks (#86).
+    from . import market
+    live_fees = market.fees(config.PAIRS[0]) if config.PAIRS else {
+        "maker": config.MAKER_FEE, "taker": config.TAKER_FEE}
     return PROMPT.format(
         mandate=mandate,
         lessons=lessons_block,
-        fee_pct=config.MAKER_FEE * 100,
+        maker_pct=live_fees["maker"] * 100,
+        taker_pct=live_fees["taker"] * 100,
+        roundtrip_pct=live_fees["taker"] * 2 * 100,
         ccy=config.BASE_CURRENCY, sym=config.symbol(),
         pairs=", ".join(config.PAIRS),
         min_order=min_order,
