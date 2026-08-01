@@ -328,12 +328,15 @@ def _coerce_object(raw: str) -> dict:
     return obj
 
 
-def _call_gemini(key: str, model: str, prompt: str, http: httpx.Client) -> str:
+def _call_gemini(key: str, model: str, prompt: str, http: httpx.Client,
+                 json_mode: bool = True) -> str:
+    cfg = {"temperature": 0.2, "maxOutputTokens": 2048}
+    if json_mode:
+        cfg["responseMimeType"] = "application/json"
     r = http.post(
         GEMINI_API.format(model=model), params={"key": key},
         json={"contents": [{"parts": [{"text": prompt}]}],
-              "generationConfig": {"temperature": 0.2, "responseMimeType": "application/json",
-                                   "maxOutputTokens": 2048}})
+              "generationConfig": cfg})
     r.raise_for_status()
     return r.json()["candidates"][0]["content"]["parts"][0]["text"]
 
@@ -411,19 +414,29 @@ def _retryable(e: Exception) -> bool:
     return isinstance(e, httpx.TransportError)  # covers timeouts + connect/read
 
 
-def _call(provider: str, key: str, chosen: str, prompt: str, http: httpx.Client) -> str:
+def _call(provider: str, key: str, chosen: str, prompt: str, http: httpx.Client,
+          json_mode: bool = True) -> str:
     if provider == "gemini":
-        return _call_gemini(key, chosen, prompt, http)
+        return _call_gemini(key, chosen, prompt, http, json_mode)
     if provider == "anthropic":
         return _call_anthropic(key, chosen, prompt, http)
-    base, _, _, json_mode = OPENAI_COMPAT[provider]
-    return _call_openai_compat(base, key, chosen, prompt, http, json_mode)
+    base, _, _, provider_json = OPENAI_COMPAT[provider]
+    return _call_openai_compat(base, key, chosen, prompt, http,
+                               provider_json and json_mode)
 
 
 def ask(prompt: str, http: httpx.Client | None = None,
         model: str | None = None, deep: bool = False,
-        provider: str | None = None) -> str:
+        provider: str | None = None, json_mode: bool = True) -> str:
     """Raw model call. Returns the JSON text.
+
+    `json_mode=False` asks for PROSE instead. Every call used to force the
+    provider's JSON response mode, which is right for a decision and wrong for
+    the monthly self-review: that prompt ends "answer with ONLY the lessons note
+    text", and a model told to write prose under a JSON-only constraint answers
+    with the smallest valid JSON it can — the 01-08-2026 review returned the
+    literal `[1]`, which was stored as the note and injected into every
+    subsequent live decision prompt as the bot's carried-forward memory.
 
     `provider` overrides config.LLM_PROVIDER for this call — that is how a shadow
     arm runs a RIVAL brain on the same prompt (#31). Left None, the live bot's
@@ -456,7 +469,7 @@ def ask(prompt: str, http: httpx.Client | None = None,
     try:
         for attempt in range(1, RETRY_ATTEMPTS + 1):
             try:
-                return _strip_fences(_call(provider, key, chosen, prompt, http))
+                return _strip_fences(_call(provider, key, chosen, prompt, http, json_mode))
             except (httpx.HTTPError, KeyError, IndexError) as e:
                 if attempt < RETRY_ATTEMPTS and _retryable(e):
                     wait = RETRY_BACKOFF_S * (2 ** (attempt - 1))

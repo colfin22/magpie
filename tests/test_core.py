@@ -5,7 +5,7 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
-from app import advisor, config, db, engine, market, portfolio, sleeves
+from app import advisor, config, db, engine, ha, market, portfolio, sleeves
 
 TZ = ZoneInfo("Europe/Dublin")
 
@@ -893,6 +893,68 @@ def test_self_review_equity_is_one_row_per_day_and_is_the_portfolio(monkeypatch)
         assert "GROUP BY day, sleeve" not in src, "the malformed equity query is back (#74)"
     finally:
         conn.close(); os.unlink(p)
+
+
+# --- the self-review asks for PROSE, and must refuse a non-answer -------------
+
+def test_self_review_asks_for_prose_not_json():
+    """REVIEW_PROMPT ends 'answer with ONLY the lessons note text'. Every ask() used to
+    force the provider's JSON response mode, so the model answered with the smallest
+    valid JSON it could -- the 01-08-2026 review returned the literal `[1]`, which was
+    stored as the note and injected into every later live decision prompt."""
+    import inspect
+    src = inspect.getsource(engine.self_review)
+    assert "json_mode=False" in src, "the review must not be asked under JSON response mode"
+
+
+def test_prose_guard_rejects_non_answers():
+    assert not engine._is_prose("[1]")            # the shape that actually shipped
+    assert not engine._is_prose("")
+    assert not engine._is_prose("null")
+    assert not engine._is_prose('{"lessons": "too short anyway"}')
+    assert not engine._is_prose("too short")
+    real = ("Fees are the whole story this month: eight of fifteen fills settled at the "
+            "taker rate, doubling the hurdle. Trade less; wait for the maker fill.")
+    assert engine._is_prose(real)
+
+
+def test_self_review_does_not_store_a_non_answer(monkeypatch):
+    """A failed review must SAY so, not leave a lessons card that reads like a
+    considered one -- and must not overwrite a good previous note."""
+    conn, p = make_db()
+    try:
+        db.set_setting(conn, "lessons", "a real note from last month")
+        conn.execute("INSERT INTO decisions(at, mode, sleeve, action, status, reasoning)"
+                     " VALUES(?,?,?,?,?,?)",
+                     (datetime.now(timezone.utc).isoformat(), "live", "swing",
+                      "hold", "held", "waiting"))
+        conn.commit()
+
+        pushed = []
+        monkeypatch.setattr(db, "connect", lambda: conn)
+        monkeypatch.setattr(config, "mode", lambda: "live")
+        monkeypatch.setattr(advisor, "ask", lambda *a, **k: "[1]")
+        monkeypatch.setattr(market, "tickers", lambda *a, **k: {})
+        monkeypatch.setattr(ha, "notify", lambda t, m: pushed.append((t, m)) or True)
+
+        out = engine.self_review()
+        assert out["status"] == "error"
+        assert pushed and "FAILED" in pushed[0][0], "a failed review must be announced"
+
+        # self_review() closes the connection it was handed, so read the file back
+        import sqlite3
+        after = sqlite3.connect(p)
+        try:
+            kept = after.execute("SELECT value FROM settings WHERE key='lessons'").fetchone()
+            assert kept[0] == "a real note from last month", "a junk answer overwrote a good note"
+        finally:
+            after.close()
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+        os.unlink(p)
 
 
 # --- #75: the status code must not disagree with the payload ------------------

@@ -416,6 +416,29 @@ measured, not remembered — trust it over your recollection of your own reasoni
 Answer with ONLY the lessons note text, no preamble."""
 
 
+MIN_LESSONS_CHARS = 80   # a "max 200 words" note; anything this short is not one
+
+
+def _is_prose(note: str) -> bool:
+    """Is this actually a lessons note, or the shape of a non-answer?
+
+    The note is stored ONCE a month and then injected into EVERY decision prompt
+    on the live-money path, so a junk note is not a cosmetic failure — it is the
+    bot's whole carried-forward memory. On 01-08-2026 the review returned the
+    literal `[1]` (prose asked for under a forced JSON response mode) and it was
+    stored and used unchecked. Reject rather than store: a review that failed
+    must SAY it failed, not leave a lessons card that reads like a considered one.
+    """
+    n = (note or "").strip()
+    if len(n) < MIN_LESSONS_CHARS:
+        return False
+    try:
+        # a bare JSON value (list/dict/number/null) is a non-answer, not a note
+        return isinstance(json.loads(n), str)
+    except ValueError:
+        return True   # unparseable as JSON == it's prose, which is what we want
+
+
 def self_review() -> dict:
     """Monthly: distil the ledger into a lessons note for future prompts."""
     conn = db.connect()
@@ -455,9 +478,17 @@ def self_review() -> dict:
             equity=json.dumps(equity, indent=1)[:4000],
             calibration=scoring.summary_line(conn, mode))
         try:
-            note = advisor.ask(prompt, deep=True).strip()[:1500]
+            # prose, NOT json_mode — this prompt asks for a written note
+            note = advisor.ask(prompt, deep=True, json_mode=False).strip()[:1500]
         except advisor.AdvisorError as e:
             return {"status": "error", "detail": str(e)}
+        if not _is_prose(note):
+            detail = f"model returned a non-answer, not stored: {note[:80]!r}"
+            LOGGER.error("self-review rejected: %s", detail)
+            ha.notify("Magpie monthly self-review FAILED",
+                      "No lessons note written this month — the model returned "
+                      f"{note[:60]!r}. The previous note (if any) is unchanged.")
+            return {"status": "error", "detail": detail}
         db.set_setting(conn, "lessons", note)
         db.set_setting(conn, "lessons_at", _now())
         ha.notify("Magpie monthly self-review",
