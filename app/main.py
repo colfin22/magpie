@@ -590,6 +590,7 @@ def api_state():
                 "lessons": {"text": db.get_setting(conn, "lessons"),
                             "at": db.get_setting(conn, "lessons_at")},
                 "benchmark": ledger.bench_value(conn, config.mode(), prices),
+                "fear_greed": market.fear_greed(),
                 "standings": arms.standings(conn, config.mode(), prices),
                 "credits": advisor.openrouter_credits(),   # cached; the arms' fuel gauge (#42)
                 "calibration": scoring.calibration(conn, config.mode()),
@@ -697,6 +698,15 @@ def dashboard():
  .sub{color:var(--dim);font-size:13.5px;line-height:1.5;margin-top:14px}
  .sub b{color:var(--ink)}
  .fg{margin-top:12px;color:var(--dim);font-size:13px}
+ .fngauge{margin-top:14px;display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+ .fngauge .lbl{color:var(--faint);font-size:10.5px;font-weight:800;letter-spacing:.7px;
+   text-transform:uppercase;width:100%}
+ .fngbar{position:relative;width:140px;height:6px;border-radius:3px;flex:0 0 auto;
+   background:linear-gradient(90deg,#ff6b6b,#ffb020,#8b93a7,#4cd97b)}
+ .fngdot{position:absolute;top:-3px;width:12px;height:12px;border-radius:50%;
+   background:#fff;border:2px solid #0b0d12;transform:translateX(-50%)}
+ .fngval{font-weight:800;font-size:13px}
+ .fngyest{color:var(--faint);font-size:12px}
  .charthead{display:flex;align-items:center;gap:18px;font-size:12.5px;color:var(--dim);
    margin-bottom:6px;flex-wrap:wrap}
  .charthead .k{display:flex;align-items:center;gap:6px}
@@ -764,6 +774,12 @@ def dashboard():
     <div class="heroline" id="pnl"></div>
     <div class="sub" id="vs"></div>
     <div class="fg" id="nextcheck"></div>
+    <div class="fngauge" id="fng" hidden>
+      <span class="lbl">Fear &amp; Greed</span>
+      <div class="fngbar"><div class="fngdot" id="fng-dot"></div></div>
+      <span class="fngval" id="fng-val"></span>
+      <span class="fngyest" id="fng-yest"></span>
+    </div>
   </div>
   <div>
     <div class="charthead" id="chartlegend"></div>
@@ -852,6 +868,15 @@ async function load(){
       `next decision ${n.toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'})}` +
       ` · in ${Math.floor(mins / 60)}h ${mins % 60}m`;
   }
+  // Fear & Greed gauge — same index the brain reads in its own prompt (0=extreme fear, 100=extreme greed)
+  const fng = document.getElementById('fng');
+  if (s.fear_greed && s.fear_greed.today) {
+    fng.hidden = false;
+    const t = s.fear_greed.today, y = s.fear_greed.yesterday;
+    document.getElementById('fng-dot').style.left = t.value + '%';
+    document.getElementById('fng-val').textContent = `${t.value} · ${t.label}`;
+    document.getElementById('fng-yest').textContent = y ? `yesterday ${y.value} · ${y.label}` : '';
+  } else { fng.hidden = true; }
   const modeEl = document.getElementById('mode');
   modeEl.textContent = s.halted ? `${s.mode} — halted` : s.mode;
   // .pill must survive: the class carries the shape, the state word carries the colour
