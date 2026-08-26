@@ -685,6 +685,7 @@ def dashboard():
    font-weight:700;margin-right:2px}
  .chip{font-size:12px;font-weight:700;padding:3px 9px;border-radius:7px;background:var(--panel2);
    border:1px solid var(--line);color:#c7cede}
+ .chip .px{color:var(--faint);font-weight:600;margin-left:5px}
  .card{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:22px 24px}
  .eyebrow{color:var(--faint);font-size:11px;font-weight:800;letter-spacing:.9px;
    text-transform:uppercase;margin:0 0 10px}
@@ -884,12 +885,12 @@ async function load(){
   document.getElementById('equity').textContent = `${CCY}${s.overview.total_eur.toFixed(2)}`;
   document.getElementById('halted').textContent = s.halted ? " halted — POST /api/resume to re-arm" : "";
   // the traded universe is just the configured pairs — no invented "new this week" markers
-  const uni = Object.keys(s.prices || {}).map(p => p.split('/')[0]);
+  const uni = Object.entries(s.prices || {}).map(([p, px]) => [p.split('/')[0], px]);
   const uEl = document.getElementById('universe');
   if (uni.length) {
     uEl.hidden = false;
     uEl.innerHTML = '<span class="lbl">Universe</span>' +
-      uni.map(a => `<span class="chip">${a}</span>`).join('');
+      uni.map(([a, px]) => `<span class="chip">${a}<span class="px">${CCY}${px.toFixed(px < 1 ? 4 : 2)}</span></span>`).join('');
   } else { uEl.hidden = true; }
   document.getElementById('sleeves').innerHTML = s.overview.sleeves.map(v => {
     const d = v.total_eur - v.allocated;
