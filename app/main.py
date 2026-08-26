@@ -890,7 +890,7 @@ async function load(){
   if (uni.length) {
     uEl.hidden = false;
     uEl.innerHTML = '<span class="lbl">Universe</span>' +
-      uni.map(([a, px]) => `<span class="chip">${a}<span class="px">${CCY}${px.toFixed(px < 1 ? 4 : 2)}</span></span>`).join('');
+      uni.map(([a, px]) => `<span class="chip">${a}<span class="px">${CCY}${px.toLocaleString('en-US', {minimumFractionDigits: px < 1 ? 4 : 2, maximumFractionDigits: px < 1 ? 4 : 2})}</span></span>`).join('');
   } else { uEl.hidden = true; }
   document.getElementById('sleeves').innerHTML = s.overview.sleeves.map(v => {
     const d = v.total_eur - v.allocated;
