@@ -89,6 +89,10 @@ DYNAMIC_TOP_N = int(os.environ.get("DYNAMIC_TOP_N", "5"))
 # (grace band N+1..FLOOR) but is force-sold once it drops past this rank. Must be
 # >= DYNAMIC_TOP_N; set equal to it to sell the instant a coin leaves the buy set.
 DYNAMIC_SELL_FLOOR_N = int(os.environ.get("DYNAMIC_SELL_FLOOR_N", "10"))
+# BTC/ETH are always in BASE_PAIRS but never come through the dynamic-universe's
+# CoinGecko lookup (top_alt_pairs excludes BTC as the base asset) — seeded here so
+# the Universe chips can link to their Kraken price page without a network call.
+STATIC_COIN_SLUGS = {"BTC": "bitcoin", "ETH": "ethereum"}
 
 # location / timezone (IANA name) — the clock the daily 06:00, Monday and 1st-of-
 # month decision slots run on. Safe to change (no money implication); drives

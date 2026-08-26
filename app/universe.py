@@ -50,8 +50,10 @@ def validate_tradeable(pair: str) -> None:
         raise ValueError(f"{base} isn't an active EUR spot pair on Kraken")
 
 
-def top_alt_pairs(n: int, http: httpx.Client | None = None) -> list[str]:
-    """The top-n altcoin EUR pairs by market cap that exist on Kraken spot."""
+def _ranked_alt_coins(n: int, http: httpx.Client | None = None) -> list[tuple[str, str]]:
+    """The top-n tradeable altcoin EUR pairs by market cap, each paired with its
+    CoinGecko slug (e.g. 'bitcoin', 'dogecoin') where CoinGecko supplied one —
+    the slug is what a Kraken public price-page link is built from."""
     own = http is None
     http = http or httpx.Client(timeout=20)
     try:
@@ -75,10 +77,15 @@ def top_alt_pairs(n: int, http: httpx.Client | None = None) -> list[str]:
         pair = f"{sym}/{config.BASE_CURRENCY}"
         m = markets.get(pair)
         if m and m.get("active") and m.get("spot"):
-            out.append(pair)
+            out.append((pair, c.get("id") or ""))
             if len(out) >= n:
                 break
     return out
+
+
+def top_alt_pairs(n: int, http: httpx.Client | None = None) -> list[str]:
+    """The top-n altcoin EUR pairs by market cap that exist on Kraken spot."""
+    return [pair for pair, _slug in _ranked_alt_coins(n, http=http)]
 
 
 def _held_pairs(conn) -> set[str]:
@@ -89,6 +96,15 @@ def _held_pairs(conn) -> set[str]:
             if asset != config.BASE_CURRENCY:
                 held.add(f"{asset}/{config.BASE_CURRENCY}")
     return held
+
+
+def coin_slugs(conn) -> dict:
+    """Ticker symbol -> CoinGecko/Kraken price-page slug, for every coin Magpie
+    can currently link to. Static BTC/ETH seed + whatever the last dynamic-
+    universe refresh captured; a symbol with no known slug is simply absent —
+    callers must not guess a URL for it."""
+    dyn = json.loads(db.get_setting(conn, "dynamic_pair_slugs", "{}") or "{}")
+    return {**config.STATIC_COIN_SLUGS, **dyn}
 
 
 def current(conn) -> dict:
@@ -149,12 +165,14 @@ def refresh(conn, notify: bool = True, http: httpx.Client | None = None) -> dict
     from datetime import datetime, timezone
     floor_n = max(config.DYNAMIC_SELL_FLOOR_N, config.DYNAMIC_TOP_N)
     try:
-        ranked = top_alt_pairs(floor_n, http=http)   # ordered top-floor_n alts on Kraken
+        ranked_coins = _ranked_alt_coins(floor_n, http=http)   # ordered top-floor_n alts on Kraken
     except Exception as e:  # noqa: BLE001
         LOGGER.error("universe refresh failed: %s", e)
         return {"status": "error", "detail": str(e)}
+    ranked = [pair for pair, _slug in ranked_coins]
     if not ranked:
         return {"status": "error", "detail": "no tradeable alt pairs resolved"}
+    new_slugs = {pair.split("/")[0]: slug for pair, slug in ranked_coins if slug}
     buy_top = ranked[:config.DYNAMIC_TOP_N]  # the coins it may BUY
     floor_set = set(ranked)                  # ranks 1..floor_n — anything held here is kept
     # base + manually pinned coins are deliberate choices — never auto-sold
@@ -170,6 +188,10 @@ def refresh(conn, notify: bool = True, http: httpx.Client | None = None) -> dict
     prev = json.loads(db.get_setting(conn, "dynamic_pairs", "[]") or "[]")
     db.set_setting(conn, "dynamic_pairs", json.dumps(dynamic))
     db.set_setting(conn, "dynamic_pairs_at", datetime.now(timezone.utc).isoformat(timespec="seconds"))
+    # merge onto the prior slug map so a grace-band coin (still held, ranked outside
+    # this refresh's window) keeps the slug it was captured with on an earlier refresh
+    prev_slugs = json.loads(db.get_setting(conn, "dynamic_pair_slugs", "{}") or "{}")
+    db.set_setting(conn, "dynamic_pair_slugs", json.dumps({**prev_slugs, **new_slugs}))
     config.apply_universe(conn)
     added = [p for p in dynamic if p not in prev]
     removed = [p for p in prev if p not in dynamic]

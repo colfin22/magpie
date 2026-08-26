@@ -15,11 +15,13 @@ def make_db():
 
 class FakeCG:
     """Stand-in CoinGecko markets response, market-cap ordered."""
-    def __init__(self, symbols):
+    def __init__(self, symbols, slugs=None):
         self.symbols = symbols
+        self.slugs = slugs or {}
 
     def get(self, url, params):
-        data = [{"symbol": s.lower(), "market_cap_rank": i + 1} for i, s in enumerate(self.symbols)]
+        data = [{"symbol": s.lower(), "market_cap_rank": i + 1, "id": self.slugs.get(s, "")}
+                for i, s in enumerate(self.symbols)]
 
         class R:
             def raise_for_status(self_):
@@ -46,6 +48,40 @@ def test_top_alt_pairs_filters_and_ranks(monkeypatch):
                         lambda: FakeMarkets(["ETH/EUR", "SOL/EUR", "ADA/EUR", "DOGE/EUR"]))
     got = universe.top_alt_pairs(3, http=cg)
     assert got == ["ETH/EUR", "SOL/EUR", "ADA/EUR"]  # BTC/USDT/WBTC excluded, XRP not on Kraken
+
+
+def test_refresh_captures_coin_slugs(monkeypatch):
+    """A weekly refresh persists each dynamic coin's CoinGecko slug, merged with
+    the static BTC/ETH seed, for building Kraken price-page links."""
+    conn, p = make_db()
+    monkeypatch.setattr(config, "DYNAMIC_UNIVERSE_ENABLED", True)
+    monkeypatch.setattr(config, "DYNAMIC_TOP_N", 2)
+    monkeypatch.setattr(config, "DYNAMIC_SELL_FLOOR_N", 2)
+    monkeypatch.setattr(config, "BASE_PAIRS", ["BTC/EUR"])
+    monkeypatch.setattr(universe.ha, "notify", lambda t, m: True)
+    cg = FakeCG(["ETH", "DOGE"], slugs={"ETH": "ethereum", "DOGE": "dogecoin"})
+    monkeypatch.setattr(universe.market, "exchange",
+                        lambda: FakeMarkets(["ETH/EUR", "DOGE/EUR"]))
+    r = universe.refresh(conn, http=cg)
+    assert r["status"] == "ok"
+    slugs = universe.coin_slugs(conn)
+    assert slugs == {"BTC": "bitcoin", "ETH": "ethereum", "DOGE": "dogecoin"}  # static + dynamic merged
+    conn.close(); os.unlink(p)
+
+
+def test_coin_slugs_omits_unknown_symbol(monkeypatch):
+    """A coin CoinGecko didn't return an id for is simply absent — never guessed."""
+    conn, p = make_db()
+    monkeypatch.setattr(config, "DYNAMIC_UNIVERSE_ENABLED", True)
+    monkeypatch.setattr(config, "DYNAMIC_TOP_N", 1)
+    monkeypatch.setattr(config, "DYNAMIC_SELL_FLOOR_N", 1)
+    monkeypatch.setattr(config, "BASE_PAIRS", ["BTC/EUR"])
+    monkeypatch.setattr(universe.ha, "notify", lambda t, m: True)
+    cg = FakeCG(["ADA"])  # no slug supplied
+    monkeypatch.setattr(universe.market, "exchange", lambda: FakeMarkets(["ADA/EUR"]))
+    universe.refresh(conn, http=cg)
+    assert "ADA" not in universe.coin_slugs(conn)
+    conn.close(); os.unlink(p)
 
 
 def test_refresh_disabled_is_noop():

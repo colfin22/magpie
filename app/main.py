@@ -582,6 +582,7 @@ def api_state():
             if d["status"] in ("error", "invalid", "no_key"):
                 d["failure"] = advisor.explain(d.get("detail") or "")
         return {"mode": config.mode(), "version": __version__, "prices": prices, "overview": ov,
+                "coin_slugs": universe.coin_slugs(conn),
                 "ccy": config.symbol(), "ccy_code": config.BASE_CURRENCY,
                 "tz": config.TIMEZONE,
                 "next_cycle": _next_cycle_iso(),
@@ -684,7 +685,8 @@ def dashboard():
  .universe .lbl{color:var(--faint);text-transform:uppercase;letter-spacing:.6px;font-size:11px;
    font-weight:700;margin-right:2px}
  .chip{font-size:12px;font-weight:700;padding:3px 9px;border-radius:7px;background:var(--panel2);
-   border:1px solid var(--line);color:#c7cede}
+   border:1px solid var(--line);color:#c7cede;text-decoration:none;display:inline-block}
+ a.chip:hover{border-color:var(--dim)}
  .chip .px{color:var(--faint);font-weight:600;margin-left:5px}
  .card{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:22px 24px}
  .eyebrow{color:var(--faint);font-size:11px;font-weight:800;letter-spacing:.9px;
@@ -890,7 +892,13 @@ async function load(){
   if (uni.length) {
     uEl.hidden = false;
     uEl.innerHTML = '<span class="lbl">Universe</span>' +
-      uni.map(([a, px]) => `<span class="chip">${a}<span class="px">${CCY}${px.toLocaleString('en-US', {minimumFractionDigits: px < 1 ? 4 : 2, maximumFractionDigits: px < 1 ? 4 : 2})}</span></span>`).join('');
+      uni.map(([a, px]) => {
+        const label = `${a}<span class="px">${CCY}${px.toLocaleString('en-US', {minimumFractionDigits: px < 1 ? 4 : 2, maximumFractionDigits: px < 1 ? 4 : 2})}</span>`;
+        const slug = (s.coin_slugs || {})[a];
+        return slug
+          ? `<a class="chip" href="https://www.kraken.com/prices/${slug}" target="_blank" rel="noopener">${label}</a>`
+          : `<span class="chip">${label}</span>`;
+      }).join('');
   } else { uEl.hidden = true; }
   document.getElementById('sleeves').innerHTML = s.overview.sleeves.map(v => {
     const d = v.total_eur - v.allocated;
