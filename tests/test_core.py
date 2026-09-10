@@ -612,6 +612,41 @@ def test_tickers_gives_up_after_the_retries(monkeypatch):
         market.tickers(["BTC/EUR"])
 
 
+def test_tickers_retries_krakens_no_data_blip(monkeypatch):
+    """Kraken's ticker endpoint also blips with a 200-wrapped EGeneral:No data
+    (ccxt.ExchangeError, not a network error) on an otherwise-valid pair. Reproduced
+    flip-flopping on the same pair a second apart -- one flaky pair was taking the
+    whole /api/state (and any other multi-pair caller) down with it."""
+    import ccxt
+    calls = []
+
+    class Flaky:
+        def fetch_ticker(self, pair):
+            calls.append(pair)
+            if len(calls) < 3:
+                raise ccxt.ExchangeError('kraken {"error":["EGeneral:No data"],"result":{}}')
+            return {"last": 100.0}
+
+    monkeypatch.setattr(market, "exchange", lambda: Flaky())
+    monkeypatch.setattr(market.time, "sleep", lambda _s: None)
+    assert market.tickers(["XRP/EUR"]) == {"XRP/EUR": 100.0}
+    assert len(calls) == 3
+
+
+def test_tickers_does_not_retry_a_different_exchange_error(monkeypatch):
+    """Only the known-transient 'No data' message is swallowed -- a real ExchangeError
+    (bad symbol, permission, etc.) must still surface immediately, not get masked."""
+    import ccxt
+
+    class Bad:
+        def fetch_ticker(self, pair):
+            raise ccxt.ExchangeError("kraken EQuery:Unknown asset pair")
+
+    monkeypatch.setattr(market, "exchange", lambda: Bad())
+    with pytest.raises(ccxt.ExchangeError):
+        market.tickers(["BTC/EUR"])
+
+
 def test_a_dead_exchange_ends_the_cycle_loudly_not_silently(monkeypatch):
     """#64 blast radius. An unreachable exchange must not CRASH run_cycle: a cycle that
     dies before the sleeve loop writes no decision row at all, and a sleeve with no row

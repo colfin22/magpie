@@ -57,12 +57,26 @@ def _fetch_ticker(pair: str) -> dict:
     Kraken's public endpoints blip. Unretried, a single 10s read timeout on one pair
     used to raise straight out of run_cycle and take the WHOLE cycle down with it —
     no decisions, no snapshot, and no row in the diary to say why (#64).
+
+    Kraken's ticker endpoint also blips with a 200-wrapped `EGeneral:No data`
+    (ccxt.ExchangeError, not a network error) on an otherwise-valid pair —
+    reproduced flip-flopping on the same pair a second apart. Retried the same
+    as a network blip; a single flaky pair was taking down the whole dashboard's
+    /api/state (and any other multi-pair caller) on every occurrence.
     """
     last = None
     for attempt in range(TICKER_ATTEMPTS):
         try:
             return exchange().fetch_ticker(pair)
         except (ccxt.RequestTimeout, ccxt.NetworkError, ccxt.ExchangeNotAvailable) as e:
+            last = e
+            if attempt + 1 < TICKER_ATTEMPTS:
+                wait = TICKER_BACKOFF_S * (2 ** attempt)
+                LOGGER.warning("ticker %s failed (%s) — retrying in %.0fs", pair, e, wait)
+                time.sleep(wait)
+        except ccxt.ExchangeError as e:
+            if "No data" not in str(e):
+                raise
             last = e
             if attempt + 1 < TICKER_ATTEMPTS:
                 wait = TICKER_BACKOFF_S * (2 ** attempt)
