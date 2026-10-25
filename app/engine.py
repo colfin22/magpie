@@ -65,7 +65,7 @@ def run_sleeve(conn, mode: str, sleeve: str, prices: dict, market_data: list[dic
         data += [market.summary(conn, p, timeframe="4h") for p in config.PAIRS]
     prompt = advisor.build_prompt(
         port, data, recent_history(conn, mode, sleeve),
-        min_order=max(portfolio.min_order_eur(p) for p in config.PAIRS),
+        min_order=max(portfolio.min_order_eur(p, prices.get(p)) for p in config.PAIRS),
         mandate=sleeves.MANDATES[sleeve],
         lessons=db.get_setting(conn, "lessons", "") or "",
         extras=extras,

@@ -27,7 +27,7 @@ def make_db():
 def stub_market(monkeypatch):
     """Arms must never reach the network for a decision, and never for a fill
     that isn't the real bot's."""
-    monkeypatch.setattr(portfolio, "min_order_eur", lambda pair: 10.0)
+    monkeypatch.setattr(portfolio, "min_order_eur", lambda pair, price=None: 10.0)
     monkeypatch.setattr(market, "touch", lambda pair: {
         "bid": PRICES[pair], "ask": PRICES[pair], "last": PRICES[pair], "spread_pct": 0.0})
     monkeypatch.setattr(config, "PAIRS", ["BTC/EUR", "ETH/EUR"], raising=False)
@@ -137,7 +137,7 @@ def test_ema20_wont_buy_into_froth_or_with_no_cash():
 
 def test_dca_buys_a_slice_and_never_sells(monkeypatch):
     monkeypatch.setattr(config, "BASE_PAIRS", ["BTC/EUR"], raising=False)
-    monkeypatch.setattr(portfolio, "min_order_eur", lambda pair: 10.0)
+    monkeypatch.setattr(portfolio, "min_order_eur", lambda pair, price=None: 10.0)
     d = arms.decide_dca({"holdings": {"EUR": 100.0}}, [row("BTC/EUR", 100, 200)],
                         "swing", random.Random(1))
     assert d["action"] == "buy" and d["fraction"] == arms.DCA_FRACTION
@@ -337,7 +337,7 @@ def test_dca_holds_rather_than_erroring_once_its_slice_is_below_the_minimum(monk
     this it proposed a sub-minimum buy every cycle, which could only be rejected —
     an error row on every cycle, for the rest of time."""
     monkeypatch.setattr(config, "BASE_PAIRS", ["BTC/EUR"], raising=False)
-    monkeypatch.setattr(portfolio, "min_order_eur", lambda pair: 10.0)
+    monkeypatch.setattr(portfolio, "min_order_eur", lambda pair, price=None: 10.0)
     fat = arms.decide_dca({"holdings": {"EUR": 100.0}}, [], "swing", random.Random(1))
     assert fat["action"] == "buy"                                   # 20% of 100 = €20, fine
     thin = arms.decide_dca({"holdings": {"EUR": 40.0}}, [], "swing", random.Random(1))

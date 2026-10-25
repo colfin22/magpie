@@ -103,11 +103,23 @@ def snapshot_all(conn, mode: str, prices: dict[str, float]) -> dict:
     return ov
 
 
-def min_order_eur(pair: str) -> float:
+def min_order_eur(pair: str, price: float | None = None) -> float:
+    """The value of the smallest order the exchange will accept for this pair.
+
+    Kraken enforces TWO minimums: a cost floor (`costmin`, ~€0.45) and a minimum
+    VOLUME in the coin itself (`ordermin`, e.g. 0.05 SOL). Checking only the cost
+    floor let a €2 SOL buy through to the exchange, which rejected it with
+    "volume minimum not met" on every retry. The binding one is whichever is larger
+    at today's price. `price` saves a ticker call when the caller already has it."""
     try:
-        m = market.exchange().market(pair)
-        cost_min = (m.get("limits", {}).get("cost") or {}).get("min")
-        return float(cost_min) if cost_min else 10.0
+        limits = market.exchange().market(pair).get("limits", {})
+        cost_min = float((limits.get("cost") or {}).get("min") or 0)
+        amount_min = float((limits.get("amount") or {}).get("min") or 0)
+        if amount_min:
+            if not price:
+                price = market.touch(pair)["ask"]
+            cost_min = max(cost_min, amount_min * float(price))
+        return cost_min if cost_min else 10.0
     except Exception:  # noqa: BLE001 - fall back to a safe floor
         return 10.0
 
@@ -264,8 +276,12 @@ def execute(conn, mode: str, sleeve: str, decision_id: int, action: str, pair: s
         price = t["bid"]
         cash = h.get(config.BASE_CURRENCY, 0.0)
         spend = cash * fraction                      # the total this sleeve is willing to part with
-        if spend < min_order_eur(pair):
-            raise ValueError(f"buy of {config.symbol()}{spend:.2f} is under the {config.symbol()}{min_order_eur(pair):.0f} exchange minimum")
+        rate = market.fees(pair)
+        # the fee comes off the amount bought (below), so the spend must clear the
+        # minimum WITH the taker headroom or the sized volume lands just under it
+        floor = min_order_eur(pair, price) * (1 + rate["taker"])
+        if spend < floor:
+            raise ValueError(f"buy of {config.symbol()}{spend:.2f} is under the {config.symbol()}{floor:.2f} exchange minimum")
         # Size so that cost + fee == spend, because the fee is charged on top.
         # Reserve headroom at the TAKER rate, not the maker one: a buy aims for a
         # post-only limit but falls back to a market order after LIMIT_FILL_WAIT_S,
@@ -274,7 +290,6 @@ def execute(conn, mode: str, sleeve: str, decision_id: int, action: str, pair: s
         # which is drawn from the shared account and rejects a LATER sleeve's
         # order rather than this one (#85). Under-spending by the difference on a
         # maker fill just leaves a few cents idle — the safe direction to be wrong.
-        rate = market.fees(pair)
         amount = spend / (price * (1 + rate["taker"]))
         if mode == "live":
             f = _live_fill(pair, "buy", amount, price, conn, decision_id, mode, sleeve,
@@ -307,7 +322,7 @@ def execute(conn, mode: str, sleeve: str, decision_id: int, action: str, pair: s
         # The old guard was dust (€1) while Kraken's minimum is ~€10 — so a small
         # fraction of a big position sailed past it, the stop got cancelled, and THEN
         # the order was rejected, leaving the whole position with no floor.
-        floor = max(DUST_EUR, min_order_eur(pair)) if mode == "live" else DUST_EUR
+        floor = max(DUST_EUR, min_order_eur(pair, price)) if mode == "live" else DUST_EUR
         if amount <= 0 or proceeds < floor:
             raise ValueError(f"nothing meaningful to sell ({asset} balance {held}, "
                              f"{config.symbol()}{proceeds:.2f} below the {config.symbol()}{floor:.2f} minimum)")

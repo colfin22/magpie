@@ -32,7 +32,7 @@ import logging
 import random
 from datetime import datetime, timedelta, timezone
 
-from . import advisor, config, db, ledger, portfolio, sleeves, stops
+from . import advisor, config, db, ledger, market, portfolio, sleeves, stops
 
 LOGGER = logging.getLogger(__name__)
 
@@ -102,7 +102,9 @@ def decide_dca(port, market_data, sleeve, rng):
     cash = port["holdings"].get(config.BASE_CURRENCY, 0)
     if cash <= 0:
         return None
-    if cash * DCA_FRACTION < portfolio.min_order_eur(pair):
+    px = next((r.get("price") for r in market_data if r.get("pair") == pair), None)
+    floor = portfolio.min_order_eur(pair, px) * (1 + market.fees(pair)["taker"])
+    if cash * DCA_FRACTION < floor:
         return None      # slice too small to be a legal order — that is a HOLD, not an error
     return {"action": "buy", "pair": pair, "fraction": DCA_FRACTION, "confidence": 0.5,
             "reasoning": f"scheduled DCA: {DCA_FRACTION:.0%} of remaining cash into {pair}"}
@@ -316,7 +318,7 @@ DEEP_SLEEVES = ("quarter", "vault")   # rare decisions get the stronger model, a
 
 
 def _ask_llm(conn, arm: dict, sleeve: str, port: dict, market_data: list[dict],
-             extras: dict | None) -> tuple[dict | None, str, str | None]:
+             extras: dict | None, prices: dict | None = None) -> tuple[dict | None, str, str | None]:
     """Run a rival brain on the IDENTICAL prompt the live bot gets.
 
     Returns (decision|None, prompt, raw). A dead or babbling model resolves to a
@@ -325,7 +327,7 @@ def _ask_llm(conn, arm: dict, sleeve: str, port: dict, market_data: list[dict],
 
     prompt = advisor.build_prompt(
         port, market_data, engine.recent_history(conn, arm["mode"], sleeve),
-        min_order=max(portfolio.min_order_eur(p) for p in config.PAIRS),
+        min_order=max(portfolio.min_order_eur(p, (prices or {}).get(p)) for p in config.PAIRS),
         mandate=sleeves.MANDATES[sleeve],
         lessons=db.get_setting(conn, "lessons", "") or "",
         extras=extras,
@@ -345,7 +347,7 @@ def run_sleeve(conn, arm: dict, sleeve: str, prices: dict, market_data: list[dic
     if arm["kind"] == "llm":
         note = f"llm:{arm['spec']}"
         try:
-            decision, note, raw = _ask_llm(conn, arm, sleeve, port, market_data, extras)
+            decision, note, raw = _ask_llm(conn, arm, sleeve, port, market_data, extras, prices)
         except advisor.AdvisorError as e:
             _record(conn, mode, sleeve, "error", str(e), note=note)
             return {"arm": arm["name"], "sleeve": sleeve, "status": "error", "detail": str(e)}

@@ -23,7 +23,7 @@ def make_db():
 
 @pytest.fixture(autouse=True)
 def _market(monkeypatch):
-    monkeypatch.setattr(portfolio, "min_order_eur", lambda pair: 1.0)
+    monkeypatch.setattr(portfolio, "min_order_eur", lambda pair, price=None: 1.0)
     monkeypatch.setattr(market, "touch", lambda pair: {
         "bid": PRICES[pair], "ask": PRICES[pair], "last": PRICES[pair], "spread_pct": 0.0})
     monkeypatch.setattr(config, "PAIRS", ["BTC/EUR"], raising=False)

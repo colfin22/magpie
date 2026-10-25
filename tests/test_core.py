@@ -58,7 +58,7 @@ def test_prompt_carries_mandate():
 
 def test_sleeve_buy_sell_isolated(monkeypatch):
     conn, p = make_db()
-    monkeypatch.setattr(portfolio, "min_order_eur", lambda pair: 10.0)
+    monkeypatch.setattr(portfolio, "min_order_eur", lambda pair, price=None: 10.0)
     try:
         prices = {"BTC/EUR": 100_000.0}
         portfolio.execute(conn, "paper", "swing", 1, "buy", "BTC/EUR", 0.9, prices)
@@ -367,7 +367,7 @@ def test_live_books_what_the_exchange_settled_not_what_we_modelled(monkeypatch):
     amount you bought, the fee is charged on top, and the price is whatever you got.
     Every trade therefore disagreed with reality (#39)."""
     conn, p = make_db()
-    monkeypatch.setattr(portfolio, "min_order_eur", lambda pair: 1.0)
+    monkeypatch.setattr(portfolio, "min_order_eur", lambda pair, price=None: 1.0)
     monkeypatch.setattr(market, "touch", lambda pair: {"bid": 0.29, "ask": 0.29, "last": 0.29})
     # the exchange says: 54.6912871 TRX landed, at 0.29, and it charged €0.0635 on top
     monkeypatch.setattr(portfolio, "_live_fill", lambda pair, side, amount, px, *a, **k: {
@@ -390,7 +390,7 @@ def test_paper_mirrors_krakens_fee_convention(monkeypatch):
     """Simulation must match reality or the shadow arms are measuring a different game:
     the fee is charged ON TOP, so the cash leaving the sleeve is exactly what it spent."""
     conn, p = make_db()
-    monkeypatch.setattr(portfolio, "min_order_eur", lambda pair: 1.0)
+    monkeypatch.setattr(portfolio, "min_order_eur", lambda pair, price=None: 1.0)
     monkeypatch.setattr(market, "touch", lambda pair: {"bid": 100.0, "ask": 100.0, "last": 100.0})
     try:
         rate = market.fees("BTC/EUR")
@@ -1242,3 +1242,37 @@ def test_partial_maker_fill_markets_only_whats_left_of_the_budget(monkeypatch):
     assert ex.cost_orders and abs(ex.cost_orders[0] - left / 1.008) < 1e-9
     spent = f["cost"] + f["fee_quote"]
     assert spent <= budget + 1e-9, f"blended spend {spent} exceeded budget {budget}"
+
+
+class _KrakenSOL:
+    """Kraken's real SOL/EUR limits (25-10-2026): a tiny cost floor, a real volume floor."""
+    def market(self, pair):
+        return {"limits": {"cost": {"min": 0.45}, "amount": {"min": 0.05}}}
+
+
+def test_min_order_counts_the_volume_minimum(monkeypatch):
+    """A €2 SOL buy cleared the €0.45 cost floor and Kraken rejected it for volume:
+    the binding minimum is 0.05 SOL at today's price, not the cost floor."""
+    monkeypatch.setattr(market, "exchange", lambda: _KrakenSOL())
+    assert portfolio.min_order_eur("SOL/EUR", 90.67) == pytest.approx(4.5335)
+    monkeypatch.setattr(market, "touch", lambda pair: {"bid": 90.0, "ask": 100.0, "last": 95.0})
+    assert portfolio.min_order_eur("SOL/EUR") == pytest.approx(5.0)   # no price -> asks the ticker
+
+
+def test_live_buy_under_volume_minimum_never_reaches_exchange(monkeypatch):
+    conn, p = make_db()
+    monkeypatch.setattr(market, "exchange", lambda: _KrakenSOL())
+    monkeypatch.setattr(market, "touch", lambda pair: {"bid": 90.67, "ask": 90.68, "last": 90.68})
+    monkeypatch.setattr(market, "fees", lambda pair: {"maker": 0.004, "taker": 0.008})
+
+    def no_order(*a, **k):
+        raise AssertionError("an order below the volume minimum was sent to the exchange")
+    monkeypatch.setattr(portfolio, "_live_fill", no_order)
+    try:
+        conn.execute("UPDATE holdings SET amount=2.35 WHERE mode='live' AND sleeve='fortnight' AND asset='EUR'")
+        conn.commit()
+        with pytest.raises(ValueError, match="under the"):
+            portfolio.execute(conn, "live", "fortnight", 1, "buy", "SOL/EUR", 1.0, {"SOL/EUR": 90.68})
+        assert portfolio.holdings(conn, "live", "fortnight")["EUR"] == 2.35   # books untouched
+    finally:
+        conn.close(); os.unlink(p)
