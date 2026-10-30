@@ -365,3 +365,41 @@ class TestPromptFees:
         p = advisor.build_prompt({"total_eur": 16}, [], [], 10.0,
                                  mandate="m")
         assert "taker" in p
+
+
+# --- OpenRouter's HTTP 200 with no 'choices' --------------------------------
+
+class SequenceHTTP:
+    """Returns each payload in turn, one per POST."""
+    def __init__(self, *payloads):
+        self.payloads, self.calls = list(payloads), 0
+
+    def post(self, url, headers=None, params=None, json=None):
+        self.calls += 1
+        return FakeResp(self.payloads.pop(0))
+
+
+def _openrouter(monkeypatch):
+    monkeypatch.setattr(config, "LLM_PROVIDER", "openrouter")
+    monkeypatch.setattr(config, "OPENROUTER_API_KEY", "k")
+    monkeypatch.setattr(advisor.time, "sleep", lambda s: None)
+
+
+def test_a_200_with_no_choices_is_retried(monkeypatch):
+    """14-10-2026: OpenRouter answered HTTP 200 with the error in the body. The bare
+    KeyError was not retryable, so one provider hiccup failed the whole sleeve."""
+    _openrouter(monkeypatch)
+    http = SequenceHTTP({"error": {"message": "upstream gone", "code": 502}},
+                        {"choices": [{"message": {"content": ANSWER}}]})
+    assert advisor.ask("p", http=http) == ANSWER
+    assert http.calls == 2
+
+
+def test_a_200_with_no_choices_keeps_the_body_when_it_gives_up(monkeypatch):
+    _openrouter(monkeypatch)
+    bad = {"error": {"message": "upstream gone", "code": 502}}
+    http = SequenceHTTP(bad, bad, bad)
+    with pytest.raises(advisor.AdvisorError) as ei:
+        advisor.ask("p", http=http)
+    assert http.calls == 3
+    assert "upstream gone" in str(ei.value)          # not just "'choices'"

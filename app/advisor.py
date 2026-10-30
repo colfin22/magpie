@@ -96,6 +96,13 @@ class AdvisorError(RuntimeError):
     pass
 
 
+class NoAnswer(RuntimeError):
+    """HTTP 200 with no answer in it. OpenRouter does this when the upstream model
+    fails mid-request: the error sits IN the body, under `error`, not in the status
+    code. It is the provider having a bad moment, so it is retried, and the body is
+    kept, because "'choices'" on its own told us nothing."""
+
+
 def build_prompt(portfolio: dict, market_data: list[dict], history: list[dict],
                  min_order: float, mandate: str = "", lessons: str = "",
                  extras: dict | None = None, topup: dict | None = None,
@@ -369,7 +376,10 @@ def _call_openai_compat(base: str, key: str, model: str, prompt: str,
     r = http.post(base + "/chat/completions",
                   headers={"Authorization": f"Bearer {key}"}, json=body)
     r.raise_for_status()
-    return r.json()["choices"][0]["message"]["content"]
+    data = r.json()
+    if not data.get("choices"):
+        raise NoAnswer(f"no 'choices' in the response: {json.dumps(data)[:300]}")
+    return data["choices"][0]["message"]["content"]
 
 
 RETRY_ATTEMPTS = 3       # total tries before a transient failure gives up
@@ -420,7 +430,7 @@ def _retryable(e: Exception) -> bool:
     if isinstance(e, httpx.HTTPStatusError):
         code = e.response.status_code
         return code == 429 or code >= 500
-    return isinstance(e, httpx.TransportError)  # covers timeouts + connect/read
+    return isinstance(e, (httpx.TransportError, NoAnswer))  # covers timeouts + connect/read
 
 
 def _call(provider: str, key: str, chosen: str, prompt: str, http: httpx.Client,
@@ -479,7 +489,7 @@ def ask(prompt: str, http: httpx.Client | None = None,
         for attempt in range(1, RETRY_ATTEMPTS + 1):
             try:
                 return _strip_fences(_call(provider, key, chosen, prompt, http, json_mode))
-            except (httpx.HTTPError, KeyError, IndexError) as e:
+            except (httpx.HTTPError, KeyError, IndexError, NoAnswer) as e:
                 if attempt < RETRY_ATTEMPTS and _retryable(e):
                     wait = RETRY_BACKOFF_S * (2 ** (attempt - 1))
                     LOGGER.warning("%s call failed (%s); retry %d/%d in %.0fs",
