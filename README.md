@@ -435,6 +435,12 @@ outage, a crashed container, a reboot, or while you are asleep.
 This is not a position cap and not a circuit breaker on the strategy. It is a floor under
 one position.
 
+After a stop fires, that sleeve may not buy the same pair again for
+`STOP_REENTRY_COOLDOWN_H` hours (default 48, `0` = off). A stop-out leaves the chart
+looking like a classic oversold entry, so without the pause the bot would buy straight
+back in and pay the fee both ways. The brain is told which pairs are cooling down, and a
+buy it proposes anyway is recorded as a hold.
+
 Three things worth knowing:
 
 - **A halt does not cancel resting stops.** They are protective; cancelling them would leave
