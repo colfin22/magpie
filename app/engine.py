@@ -417,12 +417,32 @@ Orders:
 
 Equity snapshots (daily):
 {equity}
-
+{rules}
 How your past calls actually turned out, scored at each sleeve's horizon (this is
 measured, not remembered — trust it over your recollection of your own reasoning):
 {calibration}
 
 Answer with ONLY the lessons note text, no preamble."""
+
+
+def _review_rules() -> str:
+    """What the note may NOT talk the bot out of. The note is read before every live
+    decision, so a lesson that contradicts the config just fights it: one note told
+    the bot to use 5-7% stops, every stop came out at 7%, and they fired on noise.
+    Another told every sleeve to favour one coin, so all three held it and were
+    stopped out of it on the same night."""
+    rules = ["- Every sleeve trades ONE real account. When several sleeves hold the same "
+             "coin, one bad move hits them all at once. Do not write a lesson that steers "
+             "every sleeve towards a single coin; judge each setup on its own merits."]
+    if config.STOP_LOSS_ENABLED:
+        rules.append(f"- Stop-losses are clamped to {config.STOP_LOSS_MIN_PCT:.0f}-"
+                     f"{config.STOP_LOSS_MAX_PCT:.0f}% below entry by the config. Do not "
+                     "recommend a stop distance outside that range.")
+        if config.STOP_REENTRY_COOLDOWN_H > 0:
+            rules.append(f"- After a stop-loss fires, that sleeve cannot buy the same coin "
+                         f"for {config.STOP_REENTRY_COOLDOWN_H:.0f} hours.")
+    return ("\nFixed rules set by the owner. Your note must not contradict them:\n"
+            + "\n".join(rules) + "\n")
 
 
 MIN_LESSONS_CHARS = 80   # a "max 200 words" note; anything this short is not one
@@ -485,7 +505,8 @@ def self_review() -> dict:
             decisions=json.dumps(decisions, indent=1)[:30000],
             orders=json.dumps({"orders": orders, **orders_extra}, indent=1)[:12000],
             equity=json.dumps(equity, indent=1)[:4000],
-            calibration=scoring.summary_line(conn, mode))
+            calibration=scoring.summary_line(conn, mode),
+            rules=_review_rules())
         try:
             # prose, NOT json_mode — this prompt asks for a written note
             note = advisor.ask(prompt, deep=True, json_mode=False).strip()[:1500]

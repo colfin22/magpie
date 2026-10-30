@@ -1276,3 +1276,38 @@ def test_live_buy_under_volume_minimum_never_reaches_exchange(monkeypatch):
         assert portfolio.holdings(conn, "live", "fortnight")["EUR"] == 2.35   # books untouched
     finally:
         conn.close(); os.unlink(p)
+
+
+def test_the_review_is_told_the_rules_its_note_must_not_fight(monkeypatch):
+    """The lessons note is read before every live decision. One note told the bot to use
+    5-7% stops (every stop came out at 7%, and fired on noise); the same note steered all
+    three sleeves into one coin, so they were stopped out of it on the same night."""
+    monkeypatch.setattr(config, "STOP_LOSS_ENABLED", True, raising=False)
+    monkeypatch.setattr(config, "STOP_LOSS_MIN_PCT", 10.0, raising=False)
+    monkeypatch.setattr(config, "STOP_LOSS_MAX_PCT", 30.0, raising=False)
+    monkeypatch.setattr(config, "STOP_REENTRY_COOLDOWN_H", 48.0, raising=False)
+    conn, p = make_db()
+    try:
+        conn.execute("INSERT INTO decisions(at, mode, sleeve, action, status, reasoning)"
+                     " VALUES(?,?,?,?,?,?)",
+                     (datetime.now(timezone.utc).isoformat(), "live", "swing",
+                      "hold", "held", "waiting"))
+        conn.commit()
+        seen = {}
+        monkeypatch.setattr(db, "connect", lambda: conn)
+        monkeypatch.setattr(config, "mode", lambda: "live")
+        monkeypatch.setattr(advisor, "ask", lambda prompt, **k: seen.update(prompt=prompt)
+                            or "A considered lessons note, long enough to be stored as one: patience paid, "
+                            "and chasing breakouts did not.")
+        monkeypatch.setattr(market, "tickers", lambda *a, **k: {})
+        monkeypatch.setattr(ha, "notify", lambda t, m: True)
+        assert engine.self_review()["status"] == "ok"
+        assert "10-30%" in seen["prompt"]                    # the real stop range
+        assert "single coin" in seen["prompt"]               # no all-in on one coin
+        assert "48 hours" in seen["prompt"]                  # the re-entry cooldown
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+        os.unlink(p)
