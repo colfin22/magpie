@@ -60,19 +60,56 @@ def bench_value(conn, mode: str, prices: dict[str, float]) -> dict | None:
 
 # ---------- round trips: FIFO entry->exit pairing (#7) ----------
 
+def _stop_entry(stops: list[dict], o) -> float | None:
+    """The entry price of the stop this sell was, if it was one. Matched on the
+    exchange order id (live), else on the moment it was booked (paper/shadow)."""
+    if o["detail"] != "stop-loss":
+        return None
+    for st in stops:
+        if o["exchange_id"] and st["exchange_id"] == o["exchange_id"]:
+            stops.remove(st)
+            return st["entry_price"]
+    t = datetime.fromisoformat(o["at"])
+    near = [st for st in stops if not st["exchange_id"] and st["closed_at"]
+            and abs((datetime.fromisoformat(st["closed_at"]) - t).total_seconds()) <= 60]
+    if near:
+        stops.remove(near[0])
+        return near[0]["entry_price"]
+    return None
+
+
+def _own_lot_first(lots: list, entry: float | None) -> None:
+    """A stop sells the lot it was resting under, not the oldest one. FIFO booked
+    each October SOL stop-out (about -7%) against an August lot bought at 63, so a
+    loss was shown as a +40% win, and an August lot still held (its own stop still
+    resting at Kraken) was shown as sold. Move the stop's own lot to the front."""
+    if entry is None or not lots:
+        return
+    i = min(range(len(lots)), key=lambda j: abs(lots[j][1] - entry))
+    if abs(lots[i][1] - entry) <= entry * 0.001:
+        lots.insert(0, lots.pop(i))
+
+
 def round_trips(conn, mode: str) -> list[dict]:
-    """Close buys against sells FIFO per sleeve+pair. Approximate: entry fees
-    are already inside the booked amounts; exit fees pro-rated."""
+    """Close buys against sells FIFO per sleeve+pair, except that a stop-loss sell
+    closes the lot it protected. Approximate: entry fees are already inside the
+    booked amounts; exit fees pro-rated."""
     trips = []
     keys = conn.execute("SELECT DISTINCT sleeve, pair FROM orders WHERE mode=?", (mode,))
     for k in keys.fetchall():
         lots = []  # open lots: [amount_left, entry_price, entry_at]
+        stops = [dict(r) for r in conn.execute(
+            "SELECT exchange_id, entry_price, closed_at FROM stops WHERE mode=? AND sleeve=? "
+            "AND pair=? AND status='filled' ORDER BY id", (mode, k["sleeve"], k["pair"]))]
         for o in conn.execute(
-                "SELECT at, side, amount, price, fee FROM orders "
-                "WHERE mode=? AND sleeve=? AND pair=? ORDER BY id", (mode, k["sleeve"], k["pair"])):
+                "SELECT o.at, o.side, o.amount, o.price, o.fee, o.exchange_id, d.detail "
+                "FROM orders o LEFT JOIN decisions d ON d.id = o.decision_id "
+                "WHERE o.mode=? AND o.sleeve=? AND o.pair=? ORDER BY o.id",
+                (mode, k["sleeve"], k["pair"])):
             if o["side"] == "buy":
                 lots.append([o["amount"], o["price"], o["at"]])
                 continue
+            _own_lot_first(lots, _stop_entry(stops, o))
             remaining, exit_fee_rate = o["amount"], (o["fee"] / (o["amount"] * o["price"])
                                                      if o["amount"] and o["price"] else 0)
             while remaining > 1e-12 and lots:

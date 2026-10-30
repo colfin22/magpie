@@ -411,3 +411,67 @@ def test_a_buy_straight_back_into_a_stopped_out_pair_is_refused(monkeypatch):
         assert engine.run_sleeve(conn, "paper", "fortnight", PRICES, [], {})["status"] == "executed"
     finally:
         conn.close(); os.unlink(p)
+
+
+# --- a stop sells the lot it protected, not the oldest one -------------------
+
+def test_a_stop_out_is_booked_against_its_own_lot_not_the_oldest(monkeypatch):
+    """30-10-2026: FIFO booked each October SOL stop-out (about -7%) against an August
+    lot bought far lower, so the dashboard, the leaderboard and the monthly review were
+    all shown a +40% win where there had been a loss."""
+    conn, p = make_db()
+    try:
+        monkeypatch.setitem(PRICES, "BTC/EUR", 50_000.0)
+        buy(conn, fraction=0.4)                       # old cheap lot, stop at 46k
+        monkeypatch.setitem(PRICES, "BTC/EUR", 100_000.0)
+        buy(conn, fraction=0.9)                       # new dear lot, stop at 92k
+        fired = stops.sync(conn, "paper", {"BTC/EUR": 91_000.0})
+        assert len(fired) == 1                        # only the dear lot's stop
+        trips = ledger.round_trips(conn, "paper")
+        assert len(trips) == 1
+        t = trips[0]
+        assert t["entry_price"] == 100_000.0          # its own lot...
+        assert t["pnl_eur"] < 0                       # ...so a loss, not a +82% "win"
+    finally:
+        conn.close(); os.unlink(p)
+
+
+def test_a_live_stop_is_matched_by_its_exchange_id():
+    conn, p = make_db()
+    try:
+        rows = [("2026-08-03T05:00:00+00:00", "buy", 0.1, 63.0, None, ""),
+                ("2026-10-10T05:00:00+00:00", "buy", 0.1, 98.0, None, ""),
+                ("2026-10-13T05:00:00+00:00", "sell", 0.1, 91.0, "OSTOP", "stop-loss")]
+        for at, side, amt, px, xid, detail in rows:
+            cur = conn.execute("INSERT INTO decisions(at, mode, sleeve, action, pair, status, "
+                               "detail) VALUES(?,?,?,?,?,?,?)",
+                               (at, "live", "fortnight", side, "SOL/EUR", "executed", detail))
+            conn.execute("INSERT INTO orders(at, mode, sleeve, decision_id, pair, side, amount, "
+                         "price, cost, fee, exchange_id) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                         (at, "live", "fortnight", cur.lastrowid, "SOL/EUR", side, amt, px,
+                          amt * px, 0.0, xid))
+        conn.execute("INSERT INTO stops(mode, sleeve, pair, amount, stop_price, entry_price, pct, "
+                     "exchange_id, placed_at, closed_at, fill_price, status) "
+                     "VALUES('live','fortnight','SOL/EUR',0.1,91.14,98.0,7,'OSTOP',"
+                     "'2026-10-10T05:00:00+00:00','2026-10-13T05:00:00+00:00',91.0,'filled')")
+        conn.commit()
+        (t,) = ledger.round_trips(conn, "live")
+        assert t["entry_price"] == 98.0 and t["pnl_pct"] < 0
+    finally:
+        conn.close(); os.unlink(p)
+
+
+def test_an_ordinary_sell_is_still_fifo():
+    conn, p = make_db()
+    try:
+        for at, side, px in (("2026-08-01T00:00:00+00:00", "buy", 63.0),
+                             ("2026-10-01T00:00:00+00:00", "buy", 98.0),
+                             ("2026-10-05T00:00:00+00:00", "sell", 95.0)):
+            conn.execute("INSERT INTO orders(at, mode, sleeve, pair, side, amount, price, cost, "
+                         "fee) VALUES(?,?,?,?,?,?,?,?,?)",
+                         (at, "live", "swing", "SOL/EUR", side, 0.1, px, 0.1 * px, 0.0))
+        conn.commit()
+        (t,) = ledger.round_trips(conn, "live")
+        assert t["entry_price"] == 63.0               # the brain's own sell: oldest lot first
+    finally:
+        conn.close(); os.unlink(p)
