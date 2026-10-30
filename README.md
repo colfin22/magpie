@@ -62,6 +62,9 @@ refilled from it.
 decision, what it reasoned at the time, and what actually happened — and writes
 itself a lessons note that is injected into all future prompts. The only memory
 it carries forward is the one it earns.
+The review is also given the rules its note must not fight: the stop range,
+the cooldown after a stop, and that sleeves holding the same coin share one
+account's risk.
 
 **It trades like a local.** Orders go in as post-only limits at the touch
 (maker fee ~0.25%) with a patient window before falling back to market
@@ -73,9 +76,10 @@ index; the slow sleeves think with a stronger model than the fast ones.
 phantom buy-and-hold portfolio of the same money (topped up in lockstep) — the
 dashboard and daily digest always show whether the AI is beating doing nothing,
 and the monthly self-review is confronted with the number. Closed trades are
-FIFO-paired into round trips (win rate, average win/loss, hold time), and a
-nightly reconciliation keeps the virtual sleeve books honest against real
-exchange balances.
+paired into round trips (win rate, average win/loss, hold time). A sell made
+by a stop closes the lot that stop was protecting. Every other sell is paired
+with the oldest lot first. A nightly reconciliation keeps the virtual sleeve
+books honest against real exchange balances.
 
 **Top-ups:** deposit more EUR to the exchange whenever you like. The bot notices
 the surplus at its next cycle, splits it equally across the three active sleeves,
