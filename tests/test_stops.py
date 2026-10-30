@@ -354,3 +354,60 @@ def test_a_recovered_buy_gets_a_stop_loss():
     from app import portfolio
     src = inspect.getsource(portfolio.recover_inflight)
     assert "stops.place" in src, "a recovered buy must re-rest its stop-loss (#72)"
+
+
+# --- re-entry cooldown: no buying straight back into a stopped-out pair ------
+
+def _stop_out(conn, sleeve="swing"):
+    buy(conn, sleeve=sleeve)
+    assert stops.sync(conn, "paper", {"BTC/EUR": 91_000.0})   # fires the 92k stop
+
+
+def test_a_stop_out_starts_a_cooldown_for_that_sleeve_and_pair_only(monkeypatch):
+    monkeypatch.setattr(config, "STOP_REENTRY_COOLDOWN_H", 48.0, raising=False)
+    conn, p = make_db()
+    try:
+        _stop_out(conn)
+        assert "BTC/EUR" in stops.cooldowns(conn, "paper", "swing")
+        assert stops.cooldowns(conn, "paper", "fortnight") == {}     # not another sleeve's
+    finally:
+        conn.close(); os.unlink(p)
+
+
+def test_the_cooldown_expires_and_can_be_switched_off(monkeypatch):
+    from datetime import datetime, timedelta, timezone
+    monkeypatch.setattr(config, "STOP_REENTRY_COOLDOWN_H", 48.0, raising=False)
+    conn, p = make_db()
+    try:
+        _stop_out(conn)
+        later = datetime.now(timezone.utc) + timedelta(hours=49)
+        assert stops.cooldowns(conn, "paper", "swing", now=later) == {}
+        monkeypatch.setattr(config, "STOP_REENTRY_COOLDOWN_H", 0.0, raising=False)
+        assert stops.cooldowns(conn, "paper", "swing") == {}
+    finally:
+        conn.close(); os.unlink(p)
+
+
+def test_a_buy_straight_back_into_a_stopped_out_pair_is_refused(monkeypatch):
+    """30-10-2026: four SOL stops fired and two sleeves re-bought SOL within minutes,
+    one of them higher than it had just sold. Told about it in the prompt, the brain
+    asked anyway — so the engine must refuse, as a hold."""
+    from app import engine
+    monkeypatch.setattr(config, "STOP_REENTRY_COOLDOWN_H", 48.0, raising=False)
+    seen = {}
+    monkeypatch.setattr(advisor, "build_prompt",
+                        lambda *a, **kw: (seen.update(kw), "prompt")[1])
+    monkeypatch.setattr(advisor, "ask", lambda prompt, deep=False:
+                        '{"action":"buy","pair":"BTC/EUR","fraction":1.0,'
+                        '"confidence":0.9,"reasoning":"oversold again"}')
+    conn, p = make_db()
+    try:
+        _stop_out(conn)
+        r = engine.run_sleeve(conn, "paper", "swing", PRICES, [], {})
+        assert r["status"] == "held" and "cooldown" in r["reasoning"]
+        assert "BTC/EUR" in seen["cooldown"]                          # the brain was told
+        assert portfolio.holdings(conn, "paper", "swing").get("BTC", 0) == 0   # nothing bought
+        # another sleeve, never stopped out, still buys
+        assert engine.run_sleeve(conn, "paper", "fortnight", PRICES, [], {})["status"] == "executed"
+    finally:
+        conn.close(); os.unlink(p)

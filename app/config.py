@@ -145,6 +145,10 @@ STOP_LOSS_ENABLED = os.environ.get("STOP_LOSS_ENABLED", "false").lower() == "tru
 STOP_LOSS_PCT = float(os.environ.get("STOP_LOSS_PCT", "8"))          # default distance below entry
 STOP_LOSS_MIN_PCT = float(os.environ.get("STOP_LOSS_MIN_PCT", "2"))  # tighter than this = stopped out by noise
 STOP_LOSS_MAX_PCT = float(os.environ.get("STOP_LOSS_MAX_PCT", "30"))
+# after a stop fires, that sleeve may not buy the same pair again for this long. The
+# brain's buy signal (oversold, below the EMAs) is exactly the state a stop-out leaves
+# behind, so without a pause it re-bought within minutes and paid fees both ways. 0 = off.
+STOP_REENTRY_COOLDOWN_H = float(os.environ.get("STOP_REENTRY_COOLDOWN_H", "48"))
 
 # shadow arms: rival strategies traded in simulation for comparison (#31).
 # `name:kind:spec`, comma-separated, e.g. "ema:rule:ema20,coinflip:rule:random".
@@ -203,6 +207,7 @@ EDITABLE = {
     "DEEP_PROVIDER": "str", "DEEP_MODEL": "str",
     "STOP_LOSS_ENABLED": "bool", "STOP_LOSS_PCT": "float",
     "STOP_LOSS_MIN_PCT": "float", "STOP_LOSS_MAX_PCT": "float",
+    "STOP_REENTRY_COOLDOWN_H": "float",
     "DASHBOARD_USER": "str", "DASHBOARD_PASSWORD": "str",
 }
 SECRET_KEYS = {"GEMINI_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY",

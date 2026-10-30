@@ -63,13 +63,15 @@ def run_sleeve(conn, mode: str, sleeve: str, prices: dict, market_data: list[dic
     data = list(market_data)
     if sleeve == "swing":
         data += [market.summary(conn, p, timeframe="4h") for p in config.PAIRS]
+    cooldown = stops.cooldowns(conn, mode, sleeve) if config.STOP_LOSS_ENABLED else {}
     prompt = advisor.build_prompt(
         port, data, recent_history(conn, mode, sleeve),
         min_order=max(portfolio.min_order_eur(p, prices.get(p)) for p in config.PAIRS),
         mandate=sleeves.MANDATES[sleeve],
         lessons=db.get_setting(conn, "lessons", "") or "",
         extras=extras,
-        topup=portfolio.undeployed_topup(conn, mode, sleeve))
+        topup=portfolio.undeployed_topup(conn, mode, sleeve),
+        cooldown=cooldown)
     try:
         raw = advisor.ask(prompt, deep=sleeve in DEEP_SLEEVES)
     except Exception as e:  # noqa: BLE001 - a provider's misbehaviour must never kill the cycle
@@ -90,6 +92,13 @@ def run_sleeve(conn, mode: str, sleeve: str, prices: dict, market_data: list[dic
         # all, and a missing row reads exactly like a considered quiet day).
         _record(conn, mode, sleeve, "invalid", str(e), prompt=prompt, raw=raw)
         return {"sleeve": sleeve, "status": "invalid", "detail": str(e)}
+
+    if decision["action"] == "buy" and decision["pair"] in cooldown:
+        # told in the prompt and asked anyway: refuse, as a hold, not an error —
+        # a refused re-entry is the guard working, not the bot failing
+        detail = f"re-entry cooldown: {decision['pair']} stopped out, no buy until {cooldown[decision['pair']]}"
+        _record(conn, mode, sleeve, "held", detail, prompt=prompt, raw=raw, decision=decision)
+        return {"sleeve": sleeve, "status": "held", "reasoning": detail}
 
     if decision["action"] == "hold":
         _record(conn, mode, sleeve, "held", "advisor chose to hold", prompt=prompt, raw=raw,

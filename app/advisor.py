@@ -86,6 +86,11 @@ a protective sell should rest AT THE EXCHANGE, so it protects the position even 
 bot is offline. It is clamped to {lo:.0f}-{hi:.0f}% (default {dflt:.0f}%). Set it from the
 asset's own volatility: too tight and ordinary noise stops you out for a certain loss."""
 
+COOLDOWN_BLOCK = """
+Re-entry cooldown: your stop-loss sold these recently and you may NOT buy them again
+until the time shown (UTC). A buy of them now will be refused, so choose something
+else or hold: {pairs}"""
+
 
 class AdvisorError(RuntimeError):
     pass
@@ -93,7 +98,8 @@ class AdvisorError(RuntimeError):
 
 def build_prompt(portfolio: dict, market_data: list[dict], history: list[dict],
                  min_order: float, mandate: str = "", lessons: str = "",
-                 extras: dict | None = None, topup: dict | None = None) -> str:
+                 extras: dict | None = None, topup: dict | None = None,
+                 cooldown: dict | None = None) -> str:
     # Idle cash was invisible: the portfolio went in as raw JSON and nothing named
     # the dead money in it, so a sleeve that had already bought would answer HOLD
     # about its POSITION and never notice the cash beside it. Half the portfolio sat
@@ -118,6 +124,9 @@ def build_prompt(portfolio: dict, market_data: list[dict], history: list[dict],
         stops_block = STOP_BLOCK.format(lo=config.STOP_LOSS_MIN_PCT, hi=config.STOP_LOSS_MAX_PCT,
                                         dflt=config.STOP_LOSS_PCT)
         stop_field = '\n  "stop_loss_pct": <number or null>,'
+        if cooldown:
+            stops_block += COOLDOWN_BLOCK.format(
+                pairs=", ".join(f"{p} until {t}" for p, t in sorted(cooldown.items())))
     lessons_block = ""
     if lessons:
         lessons_block = ("\nLessons from your own past performance (a monthly "

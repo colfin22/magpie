@@ -17,7 +17,7 @@ sell therefore cancels that sleeve's stops for that pair FIRST, and cancellation
 failing is treated as a reason not to sell, not as a shrug.
 """
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from . import config, market
 
@@ -33,6 +33,25 @@ def clamp_pct(pct: float | None) -> float:
     if pct is None:
         pct = config.STOP_LOSS_PCT
     return max(config.STOP_LOSS_MIN_PCT, min(config.STOP_LOSS_MAX_PCT, float(pct)))
+
+
+def cooldowns(conn, mode: str, sleeve: str, now: datetime | None = None) -> dict[str, str]:
+    """Pairs this sleeve was stopped out of recently -> when it may buy them again.
+
+    A stop-out leaves the market looking exactly like the brain's favourite entry
+    (oversold, under the EMAs), so it re-bought the same coin minutes later — sold
+    at the low, bought back higher, taker fee both ways. Per sleeve and per pair:
+    one sleeve's stop says nothing about another sleeve's book."""
+    hours = config.STOP_REENTRY_COOLDOWN_H
+    if hours <= 0:
+        return {}
+    now = now or datetime.now(timezone.utc)
+    since = (now - timedelta(hours=hours)).isoformat(timespec="seconds")
+    rows = conn.execute(
+        "SELECT pair, MAX(closed_at) last FROM stops WHERE mode=? AND sleeve=? "
+        "AND status='filled' AND closed_at>=? GROUP BY pair", (mode, sleeve, since))
+    return {r["pair"]: (datetime.fromisoformat(r["last"]) + timedelta(hours=hours))
+            .isoformat(timespec="minutes") for r in rows}
 
 
 def open_stops(conn, mode: str, sleeve: str | None = None, pair: str | None = None) -> list[dict]:
