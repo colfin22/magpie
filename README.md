@@ -439,7 +439,8 @@ After a stop fires, that sleeve may not buy the same pair again for
 `STOP_REENTRY_COOLDOWN_H` hours (default 48, `0` = off). A stop-out leaves the chart
 looking like a classic oversold entry, so without the pause the bot would buy straight
 back in and pay the fee both ways. The brain is told which pairs are cooling down, and a
-buy it proposes anyway is recorded as a hold.
+buy it proposes anyway is recorded as a hold. The shadow arms keep the same cooldown on
+their own books, so they stay a like-for-like comparison.
 
 Three things worth knowing:
 

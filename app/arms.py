@@ -318,7 +318,8 @@ DEEP_SLEEVES = ("quarter", "vault")   # rare decisions get the stronger model, a
 
 
 def _ask_llm(conn, arm: dict, sleeve: str, port: dict, market_data: list[dict],
-             extras: dict | None, prices: dict | None = None) -> tuple[dict | None, str, str | None]:
+             extras: dict | None, prices: dict | None = None,
+             cooldown: dict | None = None) -> tuple[dict | None, str, str | None]:
     """Run a rival brain on the IDENTICAL prompt the live bot gets.
 
     Returns (decision|None, prompt, raw). A dead or babbling model resolves to a
@@ -333,7 +334,8 @@ def _ask_llm(conn, arm: dict, sleeve: str, port: dict, market_data: list[dict],
         extras=extras,
         # the arm sees its OWN books' idle cash — same question, its own answer.
         # An arm given a different prompt is not a control (#48).
-        topup=portfolio.undeployed_topup(conn, arm["mode"], sleeve))
+        topup=portfolio.undeployed_topup(conn, arm["mode"], sleeve),
+        cooldown=cooldown)
     raw = advisor.ask(prompt, deep=sleeve in DEEP_SLEEVES,
                       provider=arm["provider"], model=arm["model"])
     return advisor.validate(raw), prompt, raw
@@ -343,17 +345,25 @@ def run_sleeve(conn, arm: dict, sleeve: str, prices: dict, market_data: list[dic
                rng: random.Random, extras: dict | None = None) -> dict:
     mode = arm["mode"]
     port = portfolio.valued(conn, mode, sleeve, prices)
+    # the same re-entry cooldown as the real bot, or the comparison is not like for like
+    cooldown = stops.cooldowns(conn, mode, sleeve) if config.STOP_LOSS_ENABLED else {}
     raw = None
     if arm["kind"] == "llm":
         note = f"llm:{arm['spec']}"
         try:
-            decision, note, raw = _ask_llm(conn, arm, sleeve, port, market_data, extras, prices)
+            decision, note, raw = _ask_llm(conn, arm, sleeve, port, market_data, extras, prices,
+                                           cooldown)
         except advisor.AdvisorError as e:
             _record(conn, mode, sleeve, "error", str(e), note=note)
             return {"arm": arm["name"], "sleeve": sleeve, "status": "error", "detail": str(e)}
     else:
         note = f"rule:{arm['spec']} (no LLM)"
         decision = DECIDERS[arm["spec"]](port, market_data, sleeve, rng)
+    if decision and decision.get("action") == "buy" and decision.get("pair") in cooldown:
+        detail = (f"re-entry cooldown: {decision['pair']} stopped out, "
+                  f"no buy until {cooldown[decision['pair']]}")
+        _record(conn, mode, sleeve, "held", detail, note=note, decision=decision, raw=raw)
+        return {"arm": arm["name"], "sleeve": sleeve, "status": "held", "reasoning": detail}
     if not decision or decision.get("action") == "hold":
         # a rival brain's HOLD carries its reasoning — that is the whole point of
         # its diary, so record the decision itself, not just the fact of holding

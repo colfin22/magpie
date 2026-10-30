@@ -682,3 +682,45 @@ def test_a_quiet_arm_is_not_dead_if_the_bot_is_quiet_too():
         assert not arms.health(conn, "shadow:claude", "live")["dead"]
     finally:
         conn.close(); os.unlink(p)
+
+
+def _stopped_out(conn, mode, sleeve="swing", pair="BTC/EUR"):
+    """A filled stop on the arm's own books, just now."""
+    conn.execute("INSERT INTO stops(mode, sleeve, pair, amount, stop_price, entry_price, pct, "
+                 "placed_at, closed_at, fill_price, status) VALUES(?,?,?,?,?,?,?,?,?,?,'filled')",
+                 (mode, sleeve, pair, 0.001, 90_000.0, 100_000.0, 10.0,
+                  arms._now(), arms._now(), 90_000.0))
+    conn.commit()
+
+
+@pytest.mark.parametrize("spec,mode", [
+    ("claude:llm:openrouter@anthropic/claude-sonnet-5", "shadow:claude"),
+    ("ema:rule:ema20", "shadow:ema"),
+])
+def test_an_arm_keeps_the_same_re_entry_cooldown_as_the_real_bot(monkeypatch, spec, mode):
+    """The bot may not buy straight back into a pair its stop just sold (v0.46.3). An arm
+    allowed to would not be a like-for-like control — llm and rule arms alike."""
+    stub_market(monkeypatch)
+    monkeypatch.setattr(config, "SHADOW_ARMS", spec, raising=False)
+    monkeypatch.setattr(config, "STOP_LOSS_ENABLED", True, raising=False)
+    monkeypatch.setattr(config, "STOP_REENTRY_COOLDOWN_H", 48.0, raising=False)
+    seen = {}
+
+    def fake_ask(prompt, deep=False, provider=None, model=None, **kw):
+        seen["prompt"] = prompt
+        return ('{"action":"buy","pair":"BTC/EUR","fraction":0.9,'
+                '"confidence":0.7,"reasoning":"oversold again"}')
+
+    monkeypatch.setattr(arms.advisor, "ask", fake_ask)
+    conn, p = make_db()
+    try:
+        arms.ensure_seeded(conn, arms.parse(spec)[0], "paper")
+        _stopped_out(conn, mode)
+        data = [row("BTC/EUR", 100_000, 90_000), row("ETH/EUR", 3_000, 4_000)]  # ema20 says buy BTC
+        res = arms.run_all(conn, "paper", ["swing"], PRICES, data)
+        assert res[0]["status"] == "held" and "cooldown" in res[0]["reasoning"]
+        assert not portfolio.holdings(conn, mode, "swing").get("BTC")       # nothing bought
+        if "prompt" in seen:
+            assert "Re-entry cooldown" in seen["prompt"]                    # the rival was told
+    finally:
+        conn.close(); os.unlink(p)
